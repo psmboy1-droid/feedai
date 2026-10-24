@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { userSettings } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 
@@ -12,7 +12,8 @@ export async function GET(req: Request) {
             return NextResponse.json({ success: false });
         }
 
-        // DB에서 해당 유저의 텔레그램 Chat ID 조회
+        const db = getDb(); // ✅ 새 DB 연결 방식 적용
+        
         const result = await db
             .select({ telegramChatId: userSettings.telegramChatId })
             .from(userSettings)

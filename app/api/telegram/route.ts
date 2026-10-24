@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { userSettings } from '@/db/schema';
 
 const botToken = process.env.TELEGRAM_BOT_TOKEN;
@@ -23,11 +23,9 @@ export async function POST(req: Request) {
             throw new Error("TELEGRAM_BOT_TOKEN 환경변수가 없습니다.");
         }
 
-        // ✅ `: any`를 붙여서 타입스크립트 에러 완벽 해결
         const body: any = await req.json();
         const message = body?.message;
 
-        // 일반 텍스트 메시지가 아니면 무시하고 정상 종료
         if (!message || !message.text) {
             return NextResponse.json({ success: true });
         }
@@ -36,14 +34,13 @@ export async function POST(req: Request) {
         const chatId = message.chat.id;
         const username = message.from?.first_name || '사용자';
 
-        // '/start' 명령어가 들어왔을 때 처리
         if (text.startsWith('/start')) {
-            // '/start 유저ID' 형태에서 유저ID(payload) 추출
             const parts = text.split(/\s+/);
             const userId = parts.length > 1 ? parts[1] : '';
 
             if (userId) {
                 try {
+                    const db = getDb(); // ✅ 새 DB 연결 방식 적용
                     await db.insert(userSettings)
                         .values({ 
                             userId: String(userId), 
@@ -57,7 +54,7 @@ export async function POST(req: Request) {
                     console.log(`\n🎉 [DB 연동 성공] User: ${userId}, Chat ID: ${chatId}`);
                     await sendTelegramMessage(
                         chatId,
-                        `TELE-DESK 채널 연동이 완료되었습니다.\n${username}님, 실시간 맞춤 브리핑을 수신할 준비가 되었습니다. 🚀`
+                        `피드AI 채널 연동이 완료되었습니다.\n${username}님, 실시간 맞춤 브리핑을 수신할 준비가 되었습니다. 🚀`
                     );
                 } catch (dbError) {
                     console.error('DB 저장 에러:', dbError);

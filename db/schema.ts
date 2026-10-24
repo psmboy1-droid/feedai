@@ -103,3 +103,7 @@ export const socialPosts=sqliteTable('social_posts',{
 export const socialSnapshots=sqliteTable('social_snapshots',{
  id:text('id').primaryKey(),userId:text('user_id').notNull(),accountId:text('account_id').notNull(),payload:text('payload').notNull(),nextCheck:integer('next_check').notNull(),createdAt:integer('created_at').notNull().default(0),
 });
+export const userSettings = sqliteTable('user_settings', {
+ userId: text('user_id').primaryKey(),
+ telegramChatId: text('telegram_chat_id').notNull(),
+});
