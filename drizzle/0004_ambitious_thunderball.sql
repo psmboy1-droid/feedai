@@ -1,0 +1,1 @@
+ALTER TABLE `shared_feeds` ADD `deleted` integer DEFAULT false NOT NULL;

@@ -1,0 +1,132 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1791186695095,
+      "tag": "0000_married_blur",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1791187436372,
+      "tag": "0001_lively_wind_dancer",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791189721641,
+      "tag": "0002_narrow_vision",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1791192501609,
+      "tag": "0003_parched_power_pack",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1791259180979,
+      "tag": "0004_ambitious_thunderball",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1791259613709,
+      "tag": "0005_plain_supreme_intelligence",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1791430102119,
+      "tag": "0006_seo_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1791456906536,
+      "tag": "0007_today_briefs",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1791458967318,
+      "tag": "0008_bent_bloodstrike",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1791462531740,
+      "tag": "0009_powerful_vanisher",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1791462712487,
+      "tag": "0010_wet_storm",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1791527370824,
+      "tag": "0011_bizarre_dark_phoenix",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1791782049784,
+      "tag": "0012_overrated_iron_patriot",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1791782406197,
+      "tag": "0013_secret_firelord",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1792039687241,
+      "tag": "0014_sad_pride",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1792054799761,
+      "tag": "0015_smart_ego",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1792059207749,
+      "tag": "0016_friendly_charles_xavier",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1792059335576,
+      "tag": "0017_lucky_lester",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+export type AnalysisSelection={url:string;period?:string;market?:string;risk?:string};
+export function analysisIdentity(value:AnalysisSelection){return {newsUrl:new URL(value.url).href,investmentPeriod:['단기','3~6개월','6~12개월','장기'].includes(value.period||'')?value.period:'6~12개월',preferredMarket:['한국','미국','한국+미국'].includes(value.market||'')?value.market:'한국+미국',riskProfile:['보수적','중립','공격적'].includes(value.risk||'')?value.risk:'중립'}}
+export async function analysisHash(value:unknown){return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(value)))),b=>b.toString(16).padStart(2,'0')).join('')}

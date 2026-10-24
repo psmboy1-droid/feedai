@@ -1,0 +1,3 @@
+export type Feed={id:string;name:string;url:string;category:string};
+export const categories=['전체','국내','국제','경제','미국증시','AI·테크','코인','과학','건강','스포츠','문화'];
+export const initial:Feed[]=[{"id": "feed-140", "name": "BBC · 헤드라인", "url": "https://feeds.bbci.co.uk/news/rss.xml", "category": "경제"}, {"id": "jp-nhk-headlines", "name": "NHK · 주요 뉴스", "url": "https://news.web.nhk/n-data/conf/na/rss/cat0.xml", "category": "경제"}, {"id": "c56dfb8e-ba62-4acd-891a-e3e54209e926", "name": "블룸버그ㅣ시장·기업·금리·채권", "url": "https://www.bloomberg.com/feeds/markets/news.rss", "category": "경제"}, {"id": "443eefce-d57a-4d53-b858-37848e632085", "name": "레딧ㅣr/stocksㅣ실시간 인기 게시물", "url": "https://www.reddit.com/r/stocks/top/.rss", "category": "커뮤니티"}];

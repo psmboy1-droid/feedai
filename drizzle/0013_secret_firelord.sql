@@ -1,0 +1,1 @@
+CREATE INDEX `ai_queue_owner_status` ON `ai_queue` (`owner`,`status`);

@@ -1,0 +1,2 @@
+CREATE INDEX `analysis_requests_user_status` ON `analysis_requests` (`user_id`,`status`,`created_at`);--> statement-breakpoint
+CREATE INDEX `analysis_requests_user_job` ON `analysis_requests` (`user_id`,`job_id`);
