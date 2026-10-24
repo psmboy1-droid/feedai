@@ -1,142 +1,96 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { supabase } from '../../lib/supabase';
-import AlertModal from '../../components/AlertModal'; // 💡 아까 만드신 알림창 부품 연결
-import Link from 'next/link';
+import { useState, useEffect } from 'react';
+import { Rss, KeyRound, Search, FileText, Users, ArrowUpRight, Activity, UserPlus, Eye } from 'lucide-react';
 
-export default function SignUpForm() {
-    const [formData, setFormData] = useState({
-        username: '',
-        email: '',
-        password: '',
-        passwordConfirm: '',
-        phone: '',
-    });
-    const [agreed, setAgreed] = useState(false);
-    const [loading, setLoading] = useState(false);
+const sections = [
+    { href: '/admin/social', title: 'SNS 자체 수집', description: '인스타그램·X 수집 상태와 미디어 누락을 확인합니다.', Icon: Rss },
+    { href: '/admin/billing', title: '결제·자동 청구', description: '토스페이먼츠 키와 정기 결제 상태를 관리합니다.', Icon: KeyRound },
+    { href: '/admin/dopamine', title: '도파민 센터', description: '유튜브 RSS를 등록하고 국가·쇼츠·일반 영상 분류를 관리합니다.', Icon: Rss },
+    { href: '/admin/members', title: '회원 관리', description: '회원 목록을 확인하고 이름·크레딧 잔액을 수정하거나 회원을 삭제합니다.', Icon: Users },
+    { href: '/admin/prompts', title: 'AI 프롬프트 설정', description: 'Today AI 요약과 기사 AI 분석의 명령어를 확인하고 수정합니다.', Icon: FileText },
+    { href: '/admin/rss', title: '공용 RSS 관리', description: '공용 피드 소스와 카테고리를 등록·수정·삭제합니다.', Icon: Rss },
+    { href: '/admin/ai', title: 'AI API 설정', description: 'OpenAI API 키를 등록하고 연결 상태를 확인합니다.', Icon: KeyRound },
+    { href: '/admin/seo', title: 'SEO 설정', description: '사이트 검색 정보와 공유 이미지, 검색 노출을 관리합니다.', Icon: Search }
+];
 
-    // 알림창 상태 관리
-    const [alertConfig, setAlertConfig] = useState<{ isOpen: boolean; message: string; type: 'error' | 'success' | 'info' }>({ isOpen: false, message: '', type: 'info' });
+export default function AdminHome() {
+    const [stats, setStats] = useState({ todayVisitors: 0, totalVisits: 0, todayNewUsers: 0, totalUsers: 0 });
+    const [loading, setLoading] = useState(true);
 
-    const showAlert = (message: string, type: 'error' | 'success' | 'info' = 'error') => {
-        setAlertConfig({ isOpen: true, message, type });
-    };
-
-    // 전화번호 입력 시 자동으로 하이픈(-) 넣어주기
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        let { name, value } = e.target;
-        if (name === 'phone') {
-            value = value.replace(/[^0-9]/g, '');
-            if (value.length > 3 && value.length <= 7) value = value.replace(/(\d{3})(\d+)/, '$1-$2');
-            else if (value.length > 7) value = value.replace(/(\d{3})(\d{4})(\d+)/, '$1-$2-$3');
-        }
-        setFormData({ ...formData, [name]: value });
-    };
-
-    // 회원가입 버튼 눌렀을 때 실행되는 메인 로직
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-
-        // 1. 비밀번호 패턴 검사 (영문, 숫자, 특수문자 포함 8자리 이상)
-        const passwordRegex = /^(?=.*[a-zA-Z])(?=.*\d)(?=.*[!@#$%^&*()_+={}\[\]:;"'<>,.?/\\|`~-]).{8,}$/;
-        if (!passwordRegex.test(formData.password)) {
-            return showAlert('비밀번호는 영문, 숫자, 특수문자를\n최소 1개 이상 포함하여 8자리 이상이어야 합니다.', 'error');
-        }
-
-        // 2. 비밀번호 확인 검사
-        if (formData.password !== formData.passwordConfirm) {
-            return showAlert('비밀번호가 일치하지 않습니다.\n다시 확인해 주세요.', 'error');
-        }
-
-        // 3. 약관 동의 검사
-        if (!agreed) {
-            return showAlert('서비스 약관에 동의해 주셔야 가입이 가능합니다.', 'error');
-        }
-
-        setLoading(true);
-
-        // 4. Supabase로 최종 회원가입 요청 쏴주기
-        const { data, error: signUpError } = await supabase.auth.signUp({
-            email: formData.email,
-            password: formData.password,
-            options: {
-                data: {
-                    name: formData.username, // DB 방아쇠가 낚아챌 이름
-                    phone: formData.phone,   // 연락처 정보
-                },
-                emailRedirectTo: `${window.location.origin}/login`, // 인증 후 로그인 화면으로 복귀
-            }
-        });
-
-        setLoading(false);
-
-        // 5. 결과 처리 (에러 났을 때)
-        if (signUpError) {
-            if (signUpError.message.includes('already registered')) {
-                return showAlert('이미 가입된 이메일입니다.\n로그인을 진행해 주세요.', 'error');
-            }
-            return showAlert(`가입 중 문제가 발생했습니다.\n${signUpError.message}`, 'error');
-        }
-
-        // 6. 결과 처리 (성공했을 때 - 이메일 인증 대기 상태 확인)
-        if (data?.user && !data?.session) {
-            showAlert('✉️ 인증 이메일이 발송되었습니다!\n\n입력하신 이메일함에서 [인증 링크]를 클릭하셔야\n최종 회원가입이 완료됩니다.', 'success');
-        } else {
-            showAlert('🎉 회원가입이 완료되었습니다!\n이제 로그인해 주세요.', 'success');
-        }
-    };
+    useEffect(() => {
+        fetch('/api/admin/dashboard-stats')
+            .then(res => res.json())
+            .then(data => {
+                setStats(data as typeof stats);
+                setLoading(false);
+            })
+            .catch(err => {
+                console.error('통계 데이터 로딩 실패:', err);
+                setLoading(false);
+            });
+    }, []);
 
     return (
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', backgroundColor: '#f3f4f6' }}>
-            <div style={{ backgroundColor: 'white', padding: '40px', borderRadius: '12px', boxShadow: '0 10px 25px rgba(0,0,0,0.05)', width: '100%', maxWidth: '400px' }}>
-                <h2 style={{ textAlign: 'center', fontSize: '24px', fontWeight: 'bold', marginBottom: '24px', color: '#111827' }}>회원가입</h2>
-                
-                <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    <div>
-                        <input type="text" name="username" placeholder="아이디 (이름)" required value={formData.username} onChange={handleChange} style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', boxSizing: 'border-box', outline: 'none' }} />
-                    </div>
-                    <div>
-                        <input type="email" name="email" placeholder="이메일 주소" required value={formData.email} onChange={handleChange} style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', boxSizing: 'border-box', outline: 'none' }} />
-                    </div>
-                    <div>
-                        <input type="password" name="password" placeholder="비밀번호 (영문+숫자+특수문자 8자리 이상)" required value={formData.password} onChange={handleChange} style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', boxSizing: 'border-box', outline: 'none' }} />
-                    </div>
-                    <div>
-                        <input type="password" name="passwordConfirm" placeholder="비밀번호 확인" required value={formData.passwordConfirm} onChange={handleChange} style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', boxSizing: 'border-box', outline: 'none' }} />
-                    </div>
-                    <div>
-                        <input type="tel" name="phone" placeholder="연락처 (숫자만 입력)" required value={formData.phone} onChange={handleChange} maxLength={13} style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', boxSizing: 'border-box', outline: 'none' }} />
-                    </div>
-                    
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', color: '#4b5563', marginTop: '4px', cursor: 'pointer' }}>
-                        <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
-                        서비스 약관 및 개인정보 처리방침에 동의합니다.
-                    </label>
-                    
-                    <button type="submit" disabled={loading} style={{ marginTop: '8px', padding: '14px', backgroundColor: '#2563eb', color: 'white', border: 'none', borderRadius: '8px', fontWeight: 'bold', fontSize: '16px', cursor: 'pointer' }}>
-                        {loading ? '처리 중...' : '회원가입 완료'}
-                    </button>
-                </form>
+        <div className="admin-page">
+            <header className="admin-heading">
+                <div>
+                    <a href="/my-feed">← 내 피드로 돌아가기</a>
+                    <p className="eyebrow">ADMIN</p>
+                    <h1>관리자 페이지</h1>
+                    <p>관리할 설정을 선택하세요.</p>
+                </div>
+                <span className="category-tag">관리자 전용</span>
+            </header>
 
-                <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '14px', color: '#6b7280' }}>
-                    이미 계정이 있으신가요? <Link href="/login" style={{ color: '#2563eb', fontWeight: '600', textDecoration: 'none' }}>로그인</Link>
+            {/* 🔥 고급형 4열 모니터링 대시보드 위젯 🔥 */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-10 w-full max-w-[1200px] mx-auto">
+                {/* 1. 오늘 방문자 */}
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+                    <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-sm font-semibold text-slate-500">오늘 방문 트래픽</h3>
+                        <Activity className="text-blue-500" size={18} />
+                    </div>
+                    <p className="text-3xl font-bold text-slate-900">{loading ? '-' : stats.todayVisitors.toLocaleString()}</p>
+                </div>
+
+                {/* 2. 누적 총 방문자 */}
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+                    <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-sm font-semibold text-slate-500">누적 총 트래픽</h3>
+                        <Eye className="text-indigo-500" size={18} />
+                    </div>
+                    <p className="text-3xl font-bold text-slate-900">{loading ? '-' : stats.totalVisits.toLocaleString()}</p>
+                </div>
+
+                {/* 3. 오늘 신규 가입 */}
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+                    <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-sm font-semibold text-slate-500">오늘 신규 가입</h3>
+                        <UserPlus className="text-emerald-500" size={18} />
+                    </div>
+                    <p className="text-3xl font-bold text-slate-900">{loading ? '-' : stats.todayNewUsers.toLocaleString()}</p>
+                </div>
+
+                {/* 4. 전체 가입자 */}
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+                    <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-sm font-semibold text-slate-500">피드AI 총 가입자</h3>
+                        <Users className="text-violet-500" size={18} />
+                    </div>
+                    <p className="text-3xl font-bold text-slate-900">{loading ? '-' : stats.totalUsers.toLocaleString()}</p>
                 </div>
             </div>
 
-            {/* 성공/실패 시 예쁘게 뜨는 팝업창 컴포넌트 */}
-            <AlertModal 
-                isOpen={alertConfig.isOpen} 
-                message={alertConfig.message} 
-                type={alertConfig.type}
-                onClose={() => {
-                    setAlertConfig({ ...alertConfig, isOpen: false });
-                    // 가입 성공(이메일 발송 안내) 창을 닫을 때 로그인 화면으로 튕겨냄
-                    if (alertConfig.type === 'success') {
-                        window.location.href = '/login';
-                    }
-                }} 
-            />
+            <nav className="admin-home-grid" aria-label="관리자 설정">
+                {sections.map(({ href, title, description, Icon }) => (
+                    <a className="admin-home-card" key={href} href={href}>
+                        <span className="admin-home-icon"><Icon size={24} /></span>
+                        <h2>{title}<ArrowUpRight size={18} /></h2>
+                        <p>{description}</p>
+                    </a>
+                ))}
+            </nav>
         </div>
     );
 }
