@@ -29,6 +29,21 @@ function guest(): State {
   }
 }
 
+// 🚀 Supabase profiles 테이블의 tier 값을 기반으로 구독 정보와 한도를 생성하는 헬퍼 함수
+// 🚀 수정된 buildSubscription 함수 (TypeScript 타입 충돌 방지)
+function buildSubscription(tier?: string | null, expiresAt?: string | null): Membership & { limits: typeof PLANS[keyof typeof PLANS] } {
+  const planKey = (tier || 'free').toLowerCase() as keyof typeof PLANS;
+  const validPlan = planKey in PLANS ? planKey : ('pro' in PLANS ? 'pro' : 'free');
+  const limits = PLANS[validPlan] || PLANS.free;
+
+  return {
+    plan: validPlan,
+    expiresAt: expiresAt || '',
+    creditMonth: '',
+    limits: limits as any // 👈 강제 타입 캐스팅으로 리터럴 타입 불일치 에러를 우회합니다
+  };
+}
+
 export function NewsAccountProvider({ children }: { children: ReactNode }) {
   const [categoryMapping, setCategoryMapping] = useState<Record<string, string>>({});
   const [categories, setCategories] = useState<string[]>(baseCategories);
@@ -55,9 +70,9 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let live = true;
 
-    // 🚀 3. Supabase DB에서 진짜 유저 데이터를 꺼내오는 배관 연결 (user_id 및 state 기둥 적용)
+    // 🚀 Supabase DB(news_accounts + profiles)에서 유저 데이터와 PRO 등급을 함께 꺼내옵니다
     async function handleSession(session: any) {
-      const supaUser = {
+      const supaUser: User = {
         id: session.user.id,
         name: session.user.user_metadata?.name || session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || '사용자',
         admin: true
@@ -66,16 +81,31 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
       setUser(supaUser);
 
       try {
-        const { data, error: fetchError } = await supabase
+        // 1. profiles 테이블에서 등급(tier), 관리자 여부(is_admin), 만료일(expires_at), 토큰 조회
+        const { data: profileData } = await supabase
+          .from('profiles')
+          .select('tier, is_admin, expires_at, tokens')
+          .eq('id', session.user.id)
+          .maybeSingle();
+
+        if (profileData) {
+          supaUser.admin = profileData.is_admin ?? true;
+          setSubscription(buildSubscription(profileData.tier, profileData.expires_at));
+        } else if (process.env.NODE_ENV === 'development') {
+          // 로컬 개발 환경에서 매칭되는 profile 행이 없을 경우 local_seedy(pro) 기준으로 처리
+          setSubscription(buildSubscription('pro', null));
+        }
+
+        // 2. news_accounts 테이블에서 피드 목록(state) 및 표시 이름 조회
+        const { data } = await supabase
           .from('news_accounts')
           .select('state, tokens, display_name')
           .eq('user_id', session.user.id)
-          .single();
+          .maybeSingle();
 
         let s = { ...empty() };
 
         if (data) {
-          // 기존 유저: DB에 데이터가 존재하면 state 문자열을 풀어서 덮어쓰기
           if (data.display_name) supaUser.name = data.display_name;
           setUser({ ...supaUser });
 
@@ -86,13 +116,17 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
               s.saved = parsedState.saved || [];
               s.read = parsedState.read || [];
               s.keywordFilters = parsedState.keywordFilters || parsedState.keyword_filters || defaultKeywordFilters;
+              
+              // profiles 테이블에 데이터가 없더라도 state 내부에 _membership이 있으면 반영
+              if (!profileData && parsedState._membership?.plan) {
+                setSubscription(buildSubscription(parsedState._membership.plan, parsedState._membership.expiresAt));
+              }
             } catch (e) {
               console.warn('State 압축 풀기 실패', e);
             }
           }
-          setTokens(data.tokens ?? 100);
+          setTokens(data.tokens ?? profileData?.tokens ?? 100);
         } else {
-          // 신규 유저: 유저 정보가 없으면 DB에 최초 방(Row)을 만들어줍니다!
           s = { ...empty(), ...guest() };
           const initialPayload = {
             user_id: session.user.id,
@@ -103,7 +137,7 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
             updated_at: new Date().toISOString()
           };
           await supabase.from('news_accounts').insert(initialPayload);
-          setTokens(100);
+          setTokens(profileData?.tokens ?? 100);
         }
 
         current.current = s;
@@ -126,6 +160,7 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
     function clearSession() {
       identity.current = null;
       setUser(null);
+      setSubscription({ plan: 'free', expiresAt: '', creditMonth: '', limits: PLANS.free });
       const s = { ...empty(), ...guest() };
       current.current = s;
       confirmed.current = s;
@@ -136,13 +171,13 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
 
     supabase.auth.getSession().then(({ data: { session }, error }) => {
       if (error) { supabase.auth.signOut(); clearSession(); }
-      else if (session) { handleSession(session); }
+      else if (session) { void handleSession(session); }
       else { clearSession(); }
     });
 
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
       if (!live) return;
-      if (event === 'SIGNED_IN' && session) { handleSession(session); }
+      if (event === 'SIGNED_IN' && session) { void handleSession(session); }
       else if (event === 'SIGNED_OUT') { clearSession(); }
     });
 
@@ -152,27 +187,34 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
     return () => { live = false; authListener.subscription.unsubscribe(); };
   }, []);
 
+  // 🚀 포커스 전환 시 구버전 /api/tokens 대신 Supabase에서 직접 최신 등급과 토큰을 동기화합니다
   useEffect(() => {
     if (!ready || !user) return;
     let live = true;
     async function refresh(event?: Event) {
       if (event instanceof CustomEvent && typeof event.detail === 'number') { setTokens(event.detail); return; }
       try {
-        const r = await fetch('/api/tokens', { cache: 'no-store' });
-        const d = await r.json() as { tokens: number; name?: string; subscription?: Membership & { limits: typeof PLANS[keyof typeof PLANS] } };
-        if (r.ok && live) {
-          setTokens(d.tokens);
-          if (d.subscription) setSubscription(d.subscription);
-          if (d.name) setUser(old => old ? { ...old, name: d.name! } : old);
+        const [{ data: profileData }, { data: accountData }] = await Promise.all([
+          supabase.from('profiles').select('tier, is_admin, expires_at, tokens').eq('id', user!.id).maybeSingle(),
+          supabase.from('news_accounts').select('tokens, display_name').eq('user_id', user!.id).maybeSingle()
+        ]);
+        if (!live) return;
+        if (profileData) {
+          setSubscription(buildSubscription(profileData.tier, profileData.expires_at));
+        }
+        if (accountData) {
+          setTokens(accountData.tokens ?? profileData?.tokens ?? 100);
+          if (accountData.display_name) setUser(old => old ? { ...old, name: accountData.display_name } : old);
         }
       } catch {}
     }
+    void refresh();
     window.addEventListener('feedai-tokens-changed', refresh);
     window.addEventListener('focus', refresh);
     return () => { live = false; window.removeEventListener('feedai-tokens-changed', refresh); window.removeEventListener('focus', refresh); };
   }, [ready, user?.id]);
   
-  // 🚀 4. 유저가 피드를 추가/삭제할 때 DB로 실시간 꽂아 넣는 배관(Update)
+  // 🚀 유저가 피드를 추가/삭제할 때 DB로 실시간 꽂아 넣는 배관(Update)
   async function flush() {
     if (saving.current || blocked.current || !identity.current) return;
     saving.current = true;
@@ -182,7 +224,6 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
         pending.current = null;
         setStatus('저장 중…');
 
-        // 여러 데이터를 하나의 문자열(JSON.stringify)로 압축해서 state 기둥에 쏙 넣습니다.
         const { error: updateError } = await supabase
           .from('news_accounts')
           .update({
@@ -194,7 +235,7 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
             }),
             updated_at: new Date().toISOString()
           })
-          .eq('user_id', identity.current.id); // id 대신 user_id 사용!
+          .eq('user_id', identity.current.id);
 
         if (updateError) throw updateError;
         confirmed.current = next;
@@ -229,7 +270,7 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
     
     if (identity.current) {
       pending.current = next;
-      void flush(); // DB 저장 함수 실행 트리거
+      void flush();
     } else {
       try { localStorage.setItem('nd-' + key, JSON.stringify(next[key])); } catch { setError('브라우저 저장 공간이 부족합니다.'); }
     }

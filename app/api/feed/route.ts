@@ -5,11 +5,13 @@ import { membership } from "../../../lib/membership";
 import { isRecentFeedArticle } from "../../../lib/feed-window";
 import { sharedFeed } from "../../../lib/shared-feed-cache";
 import { XMLParser } from "fast-xml-parser";
+
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
   textNodeName: "#text",
 });
+
 const list = (v: any) => (v ? (Array.isArray(v) ? v : [v]) : []);
 const str = (v: any): string =>
   typeof v === "string"
@@ -26,8 +28,16 @@ const plain = (v: any) =>
     .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ")
     .trim();
+
 function valid(raw: string) {
   const u = new URL(raw);
+
+  // 🚀 로컬 개발 환경(development)일 경우에만 SSRF 차단(localhost, 포트번호 등)을 안전하게 우회하여 테스트를 허용합니다.
+  if (process.env.NODE_ENV === 'development') {
+    return u;
+  }
+
+  // 🛡️ 리눅스 실서버(production) 배포 시에는 해킹 방지를 위해 내부망 주소를 철저히 차단합니다.
   if (
     !["http:", "https:"].includes(u.protocol) ||
     u.username ||
@@ -43,6 +53,7 @@ function valid(raw: string) {
     throw new Error("공개 HTTP 또는 HTTPS RSS 주소를 입력해 주세요.");
   return u;
 }
+
 async function loadFeed(req: Request) {
   try {
     let u = valid(new URL(req.url).searchParams.get("url") || "");
@@ -140,8 +151,6 @@ async function loadFeed(req: Request) {
 
 export async function GET(req:Request){
   try {
-    // 💡 503 에러의 주범이던 낡은 SQLite 캐시와 챗GPT Auth 로직을 싹 다 날렸습니다!
-    // 이제 외부 RSS 서버에서 다이렉트로 안전하고 빠르게 피드만 긁어옵니다.
     return await loadFeed(req);
   } catch(e) {
     return Response.json({error:e instanceof Error?e.message:'피드 수집 실패'},{status:503});
