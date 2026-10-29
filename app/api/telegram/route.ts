@@ -1,11 +1,23 @@
 import { NextResponse } from 'next/server';
-import { getDb } from '@/db';
-import { userSettings } from '@/db/schema';
+import { createClient } from '@supabase/supabase-js';
+import { z } from 'zod';
+
+export const dynamic = 'force-dynamic';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 const botToken = process.env.TELEGRAM_BOT_TOKEN;
 
-// 텔레그램 메시지 발송 전용 함수 (Cloudflare 완벽 호환)
+const ManualSaveSchema = z.object({
+    userId: z.string().min(1),
+    chatId: z.string().optional().default(''),
+});
+
+// 텔레그램 메시지 발송 전용 함수
 async function sendTelegramMessage(chatId: number | string, text: string) {
+    if (!botToken) return;
     const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
     await fetch(url, {
         method: 'POST',
@@ -19,13 +31,34 @@ async function sendTelegramMessage(chatId: number | string, text: string) {
 
 export async function POST(req: Request) {
     try {
-        if (!botToken) {
-            throw new Error("TELEGRAM_BOT_TOKEN 환경변수가 없습니다.");
+        const body: any = await req.json();
+
+        // 🚀 1. 화면 모달에서 [설정 저장] 버튼을 눌러 Chat ID를 직접 저장할 때
+        if ('userId' in body && !('message' in body)) {
+            const parsed = ManualSaveSchema.safeParse(body);
+            if (!parsed.success) {
+                return NextResponse.json({ success: false, error: '잘못된 입력값입니다.' }, { status: 400 });
+            }
+            const { userId, chatId } = parsed.data;
+            const cleanChatId = chatId.trim();
+
+            const { error } = await supabase
+                .from('user_settings')
+                .upsert(
+                    { user_id: String(userId), telegram_chat_id: cleanChatId || null },
+                    { onConflict: 'user_id' }
+                );
+
+            if (error) throw error;
+            return NextResponse.json({ success: true, chatId: cleanChatId });
         }
 
-        const body: any = await req.json();
-        const message = body?.message;
+        // 🚀 2. 텔레그램 앱에서 [시작(/start)] 버튼을 눌렀을 때 (1초 자동 연동)
+        if (!botToken) {
+            throw new Error('TELEGRAM_BOT_TOKEN 환경변수가 없습니다.');
+        }
 
+        const message = body?.message;
         if (!message || !message.text) {
             return NextResponse.json({ success: true });
         }
@@ -40,16 +73,17 @@ export async function POST(req: Request) {
 
             if (userId) {
                 try {
-                    const db = getDb(); // ✅ 새 DB 연결 방식 적용
-                    await db.insert(userSettings)
-                        .values({ 
-                            userId: String(userId), 
-                            telegramChatId: String(chatId) 
-                        })
-                        .onConflictDoUpdate({
-                            target: userSettings.userId,
-                            set: { telegramChatId: String(chatId) }
-                        });
+                    const { error } = await supabase
+                        .from('user_settings')
+                        .upsert(
+                            {
+                                user_id: String(userId),
+                                telegram_chat_id: String(chatId),
+                            },
+                            { onConflict: 'user_id' }
+                        );
+
+                    if (error) throw error;
 
                     console.log(`\n🎉 [DB 연동 성공] User: ${userId}, Chat ID: ${chatId}`);
                     await sendTelegramMessage(
@@ -72,8 +106,11 @@ export async function POST(req: Request) {
         }
 
         return NextResponse.json({ success: true });
-    } catch (error) {
+    } catch (error: any) {
         console.error('텔레그램 웹훅 에러:', error);
-        return NextResponse.json({ success: false, error: 'Webhook Handler Failed' }, { status: 500 });
+        return NextResponse.json(
+            { success: false, error: error.message || 'Webhook Handler Failed' },
+            { status: 500 }
+        );
     }
 }

@@ -1,26 +1,40 @@
 import { NextResponse } from 'next/server';
-import { getDb } from '@/db';
-import { userSettings } from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { createClient } from '@supabase/supabase-js';
+import { z } from 'zod';
+
+export const dynamic = 'force-dynamic';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+const QuerySchema = z.object({
+    userId: z.string().min(1, 'userId가 필요합니다.'),
+});
 
 export async function GET(req: Request) {
     try {
         const { searchParams } = new URL(req.url);
-        const userId = searchParams.get('userId');
+        const parsed = QuerySchema.safeParse({
+            userId: searchParams.get('userId') || '',
+        });
 
-        if (!userId) {
+        if (!parsed.success) {
             return NextResponse.json({ success: false });
         }
 
-        const db = getDb(); // ✅ 새 DB 연결 방식 적용
-        
-        const result = await db
-            .select({ telegramChatId: userSettings.telegramChatId })
-            .from(userSettings)
-            .where(eq(userSettings.userId, String(userId)))
-            .limit(1);
+        const { userId } = parsed.data;
 
-        const chatId = result[0]?.telegramChatId;
+        // ✅ 기존 getDb() 대신 Supabase의 user_settings 테이블 직접 조회
+        const { data, error } = await supabase
+            .from('user_settings')
+            .select('telegram_chat_id')
+            .eq('user_id', userId)
+            .maybeSingle();
+
+        if (error) throw error;
+
+        const chatId = data?.telegram_chat_id;
 
         if (chatId) {
             return NextResponse.json({ success: true, chatId });
