@@ -44,6 +44,27 @@ function buildSubscription(tier?: string | null, expiresAt?: string | null): Mem
   };
 }
 
+function syncAuthCookies(session: any) {
+  if (typeof document === 'undefined') return;
+  if (session?.access_token) {
+    const maxAge = 604800; // 7일
+    document.cookie = `sb-access-token=${session.access_token}; path=/; max-age=${maxAge}; SameSite=Lax`;
+    if (session.user?.id) {
+      document.cookie = `userId=${session.user.id}; path=/; max-age=${maxAge}; SameSite=Lax`;
+    }
+    if (session.user?.email) {
+      document.cookie = `userEmail=${encodeURIComponent(session.user.email)}; path=/; max-age=${maxAge}; SameSite=Lax`;
+    }
+  }
+}
+
+function clearAuthCookies() {
+  if (typeof document === 'undefined') return;
+  document.cookie = 'sb-access-token=; path=/; max-age=0; SameSite=Lax';
+  document.cookie = 'userId=; path=/; max-age=0; SameSite=Lax';
+  document.cookie = 'userEmail=; path=/; max-age=0; SameSite=Lax';
+}
+
 export function NewsAccountProvider({ children }: { children: ReactNode }) {
   const [categoryMapping, setCategoryMapping] = useState<Record<string, string>>({});
   const [categories, setCategories] = useState<string[]>(baseCategories);
@@ -72,10 +93,11 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
 
     // 🚀 Supabase DB(news_accounts + profiles)에서 유저 데이터와 PRO 등급을 함께 꺼내옵니다
     async function handleSession(session: any) {
+      syncAuthCookies(session);
       const supaUser: User = {
         id: session.user.id,
         name: session.user.user_metadata?.name || session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || '사용자',
-        admin: true
+        admin: false
       };
       identity.current = supaUser;
       setUser(supaUser);
@@ -89,7 +111,7 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
           .maybeSingle();
 
         if (profileData) {
-          supaUser.admin = profileData.is_admin ?? true;
+          supaUser.admin = profileData.is_admin === true;
           setSubscription(buildSubscription(profileData.tier, profileData.expires_at));
         } else if (process.env.NODE_ENV === 'development') {
           // 로컬 개발 환경에서 매칭되는 profile 행이 없을 경우 local_seedy(pro) 기준으로 처리
@@ -158,6 +180,7 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
     }
 
     function clearSession() {
+      clearAuthCookies();
       identity.current = null;
       setUser(null);
       setSubscription({ plan: 'free', expiresAt: '', creditMonth: '', limits: PLANS.free });
@@ -201,6 +224,7 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
         if (!live) return;
         if (profileData) {
           setSubscription(buildSubscription(profileData.tier, profileData.expires_at));
+          setUser(old => old ? { ...old, admin: profileData.is_admin === true } : old);
         }
         if (accountData) {
           setTokens(accountData.tokens ?? profileData?.tokens ?? 100);
@@ -311,6 +335,7 @@ export function AccountPanel() {
   
   const handleLogout = async (e: React.MouseEvent) => {
     e.preventDefault();
+    clearAuthCookies();
     await supabase.auth.signOut();
     window.location.href = '/'; 
   };

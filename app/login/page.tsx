@@ -1,25 +1,47 @@
 'use client';
 import { useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import Link from 'next/link'; // 🚀 1. 페이지 이동을 위한 Next.js Link 추가
+import Link from 'next/link';
+import AlertModal from '../../components/AlertModal';
 
 export default function LoginPage() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [alertState, setAlertState] = useState<{
+        isOpen: boolean;
+        message: string;
+        type: 'error' | 'success' | 'info';
+    }>({
+        isOpen: false,
+        message: '',
+        type: 'info'
+    });
+
+    const showAlert = (message: string, type: 'error' | 'success' | 'info' = 'info') => {
+        setAlertState({ isOpen: true, message, type });
+    };
 
     // 🚀 2. 진짜 이메일 로그인 로직
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         
         if (error) {
-            alert(`로그인 실패: ${error.message}`);
+            showAlert(`로그인 실패: ${error.message}`, 'error');
         } else {
+            if (data?.session) {
+                const maxAge = 604800; // 7일
+                document.cookie = `sb-access-token=${data.session.access_token}; path=/; max-age=${maxAge}; SameSite=Lax`;
+                if (data.session.user?.id) {
+                    document.cookie = `userId=${data.session.user.id}; path=/; max-age=${maxAge}; SameSite=Lax`;
+                }
+                if (data.session.user?.email) {
+                    document.cookie = `userEmail=${encodeURIComponent(data.session.user.email)}; path=/; max-age=${maxAge}; SameSite=Lax`;
+                }
+            }
             window.location.href = '/'; // 성공 시 메인 화면으로 직행!
         }
     };
-
-    // (기존에 있던 에러 유발 handleSignUp 로직은 깔끔하게 삭제했습니다!)
 
     // 🚀 3. 진짜 구글/카카오 소셜 로그인 로직
     const handleSocialLogin = async (provider: 'google' | 'kakao') => {
@@ -29,7 +51,7 @@ export default function LoginPage() {
                 redirectTo: window.location.origin, // 성공 시 메인 주소로 돌아오기
             }
         });
-        if (error) alert(`${provider} 로그인 에러: ${error.message}`);
+        if (error) showAlert(`${provider} 로그인 에러: ${error.message}`, 'error');
     };
 
     return (
@@ -76,11 +98,18 @@ export default function LoginPage() {
                     </button>
                 </form>
 
-                {/* 🚀 4. a 태그 대신 Link 컴포넌트로 완벽하게 교체! */}
                 <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '14px', color: '#6b7280' }}>
                     계정이 없으신가요? <Link href="/signup" style={{ color: '#2563eb', fontWeight: '600', textDecoration: 'none' }}>회원가입</Link>
                 </div>
             </div>
+
+            {/* 🎨 피드AI 전용 모달 알림창 */}
+            <AlertModal
+                isOpen={alertState.isOpen}
+                message={alertState.message}
+                type={alertState.type}
+                onClose={() => setAlertState(prev => ({ ...prev, isOpen: false }))}
+            />
         </div>
     );
 }

@@ -1,4 +1,4 @@
-import {env} from 'cloudflare:workers';
+const env: any = (globalThis as any).env || {};
 import {getChatGPTUser} from '../../../chatgpt-auth';
 import {socialPostForUser} from '../../../../lib/social-service';
 export async function GET(req:Request){

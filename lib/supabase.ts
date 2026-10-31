@@ -1,7 +1,17 @@
 import { createClient } from '@supabase/supabase-js';
 
-// 이제 진짜 열쇠가 무엇인지 알았으니 다시 환경변수로 안전하게 가려줍니다!
-export const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || '';
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+export function getSupabaseServer() {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+    return createClient(url, key, {
+        auth: {
+            persistSession: false,
+            autoRefreshToken: false,
+        }
+    });
+}

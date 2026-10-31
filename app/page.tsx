@@ -302,10 +302,21 @@ export default function Page({
         select={select}
         onAdd={() => setModal(true)}
         onClose={() => setMobile(false)}
+        onUpdateFeed={(updated) => {
+          setFeeds((fs) => fs.map((x) => (x.id === updated.id ? { ...x, ...updated } : x)));
+        }}
         onDelete={(id) => {
+          const target = feeds.find((x) => x.id === id);
           setFeeds((fs) => fs.filter((x) => x.id !== id));
           setArticles((a) => a.filter((x) => x.feedId !== id));
           if (source === id) setSource("");
+          if (user && target) {
+            fetch("/api/delete-signal", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ userId: user.id, feedUrl: target.url, id: target.id }),
+            }).catch(console.error);
+          }
         }}
       />
       <main>

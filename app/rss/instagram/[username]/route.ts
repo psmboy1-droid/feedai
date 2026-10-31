@@ -1,52 +1,43 @@
 import RSS from 'rss';
-import axios from 'axios';
+import { fetchRapidApiWithRotation } from '../../../../lib/rapidapi-manager';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request, { params }: { params: { username: string } }) {
     const username = params.username;
-    const host = request.headers.get('host') || 'localhost:3000';
-    const protocol = request.headers.get('x-forwarded-proto') || 'http';
+    const host = request.headers.get('host') || 'feedaix.com';
+    const protocol = request.headers.get('x-forwarded-proto') || 'https';
 
     const feed = new RSS({
-        title: `[TELE-DESK] ${username} 님의 인스타그램`,
-        description: 'TELE-DESK 자체 생성 인스타그램 RSS 피드',
+        title: `[피드AI] ${username} 님의 인스타그램`,
+        description: '피드AI 자체 생성 인스타그램 RSS 피드',
         feed_url: `${protocol}://${host}/rss/instagram/${username}`,
         site_url: `https://instagram.com/${username}`
     });
 
-    const rapidApiKeys = [
-        process.env.RAPIDAPI_KEY_1,
-        process.env.RAPIDAPI_KEY_2,
-        process.env.RAPIDAPI_KEY_3,
-        process.env.RAPIDAPI_KEY_4
-    ].filter(Boolean);
-
-    let posts = [];
+    let posts: any = [];
     let fetchSuccess = false;
 
-    for (let i = 0; i < rapidApiKeys.length; i++) {
-        try {
-            console.log(`[인스타 크롤링] ${i + 1}번째 API 키로 접속 시도 중...`);
-            const response = await axios.post("https://instagram-scraper-stable-api.p.rapidapi.com/get_ig_user_posts.php", 
-                { username: username, username_or_url: username },
-                {
-                    headers: {
-                        "Content-Type": "multipart/form-data",
-                        "x-rapidapi-key": rapidApiKeys[i] as string, 
-                        "x-rapidapi-host": "instagram-scraper-stable-api.p.rapidapi.com"
-                    },
-                    timeout: 30000 
-                }
-            );
+    try {
+        const result = await fetchRapidApiWithRotation(
+            'Instagram',
+            `instagram:${username.toLowerCase()}`,
+            () => ({
+                method: 'POST',
+                url: 'https://instagram-scraper-stable-api.p.rapidapi.com/get_ig_user_posts.php',
+                data: { username, username_or_url: username },
+                headers: {
+                    'Content-Type': 'multipart/form-data',
+                    'x-rapidapi-host': 'instagram-scraper-stable-api.p.rapidapi.com'
+                },
+                timeout: 6000 // 6초 빠른 타임아웃
+            })
+        );
 
-            fetchSuccess = true;
-            console.log(`✅ [성공] ${i + 1}번째 API 키로 데이터 획득!`);
-            posts = response.data?.posts || response.data?.data?.items || [];
-            break; 
-        } catch (error: any) {
-            console.error(`⚠️ ${i + 1}번째 키 실패:`, error.response?.status || error.message);
-        }
+        fetchSuccess = true;
+        posts = result.data?.posts || result.data?.data?.items || result.data || [];
+    } catch (err: any) {
+        console.error(`🚨 [인스타그램 RSS] 모든 키 요청 실패:`, err.message);
     }
 
     if (fetchSuccess) {
@@ -77,7 +68,7 @@ export async function GET(request: Request, { params }: { params: { username: st
     } else {
         feed.item({
             title: "[SYSTEM NOTICE] 인스타그램 연동 지연",
-            description: "현재 일일 연동 한도가 소진되었거나 API 서버 점검 중입니다.",
+            description: "현재 일일 연동 한도가 소진되었거나 API 서버 점검 중입니다. 잠시 후 자동으로 다시 시도됩니다.",
             url: `https://instagram.com/${username}`,
             date: new Date()
         });
@@ -85,6 +76,9 @@ export async function GET(request: Request, { params }: { params: { username: st
 
     return new Response(feed.xml({ indent: true }), {
         status: 200,
-        headers: { 'Content-Type': 'text/xml; charset=utf-8' }
+        headers: {
+            'Content-Type': 'application/xml; charset=utf-8',
+            'Cache-Control': 's-maxage=300, stale-while-revalidate=600'
+        }
     });
 }

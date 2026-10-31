@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Check, Globe, LoaderCircle, Plus, Rss, Search, X } from 'lucide-react';
 import { catalogCategories, type CatalogFeed } from '../lib/shared-catalog';
 import { supabase } from '../lib/supabase';
+import AlertModal from './AlertModal';
 
 type Feed = { id: string; name: string; url: string; category: string };
 function canonical(url: string) {
@@ -62,6 +63,21 @@ export default function FeedDirectory({
     const [savingChannel, setSavingChannel] = useState(false);
     const tgPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const isLinkedRef = useRef(false);
+
+    // 🎨 피드AI 전용 모달 알림창 상태
+    const [alertState, setAlertState] = useState<{
+        isOpen: boolean;
+        message: string;
+        type: 'error' | 'success' | 'info';
+    }>({
+        isOpen: false,
+        message: '',
+        type: 'info'
+    });
+
+    const showAlert = (message: string, type: 'error' | 'success' | 'info' = 'info') => {
+        setAlertState({ isOpen: true, message, type });
+    };
 
     const effectiveUserId =
         user?.id || (process.env.NODE_ENV === 'development' ? 'local_seedy' : '');
@@ -232,7 +248,7 @@ export default function FeedDirectory({
         );
     };
 
-    // 📸 인스타그램 변환 핸들러 (입력창이 비어있으면 프롬프트 팝업 호출)
+    // 📸 인스타그램 변환 핸들러
     const handleInstaConvert = () => {
         if (isConvertedSns) return;
         let rawInput = url.trim();
@@ -248,13 +264,14 @@ export default function FeedDirectory({
             cleanName = cleanName.split('instagram.com/')[1].split('/')[0].split('?')[0];
         }
         if (cleanName) {
-            setUrl(`${window.location.origin}/rss/instagram/${cleanName}`);
+            const origin = typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'https://feedaix.com';
+            setUrl(`${origin}/rss/instagram/${cleanName}`);
             setName(`${cleanName} 인스타 브리핑`);
             setManualCategory(findSnsCategory());
         }
     };
 
-    // 𝕏 X(트위터) 변환 핸들러 (입력창이 비어있으면 프롬프트 팝업 호출)
+    // 𝕏 X(트위터) 변환 핸들러
     const handleTwitterConvert = () => {
         if (isConvertedSns) return;
         let rawInput = url.trim();
@@ -270,7 +287,8 @@ export default function FeedDirectory({
             cleanName = cleanName.split(/(?:x|twitter)\.com\//)[1].split('/')[0].split('?')[0];
         }
         if (cleanName) {
-            setUrl(`${window.location.origin}/rss/twitter/${cleanName}`);
+            const origin = typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'https://feedaix.com';
+            setUrl(`${origin}/rss/twitter/${cleanName}`);
             setName(`${cleanName} X(트위터) 브리핑`);
             setManualCategory(findSnsCategory());
         }
@@ -279,7 +297,7 @@ export default function FeedDirectory({
     // 🤖 텔레그램 1초 자동 연동 실행
     const openTelegramAutoLink = () => {
         if (!effectiveUserId) {
-            alert('로그인 후 이용해 주세요.');
+            showAlert('로그인 후 이용해 주세요.', 'info');
             return;
         }
         isLinkedRef.current = false;
@@ -299,7 +317,7 @@ export default function FeedDirectory({
             if (checkCount > 60) {
                 if (tgPollRef.current) clearInterval(tgPollRef.current);
                 setAutoLinkWaiting(false);
-                alert('연동 대기 시간이 초과되었습니다. 다시 시도해 주세요.');
+                showAlert('연동 대기 시간이 초과되었습니다. 다시 시도해 주세요.', 'error');
                 return;
             }
             try {
@@ -316,7 +334,7 @@ export default function FeedDirectory({
                     setHasTelegramLinked(true);
                     setAutoLinkWaiting(false);
                     setShowChannelModal(false);
-                    alert('✅ 텔레그램 자동 연동이 완료되었습니다!');
+                    showAlert('✅ 텔레그램 자동 연동이 완료되었습니다!', 'success');
                 }
             } catch (err) {
                 console.error('연동 상태 확인 중 오류:', err);
@@ -327,7 +345,7 @@ export default function FeedDirectory({
     // 💾 텔레그램 Chat ID 수동 저장 -> /api/telegram 으로 직접 전송!
     const saveChannelSettings = async () => {
         if (!effectiveUserId) {
-            alert('로그인이 필요합니다.');
+            showAlert('로그인이 필요합니다.', 'error');
             return;
         }
         setSavingChannel(true);
@@ -343,16 +361,17 @@ export default function FeedDirectory({
                 setTgChatId(updated);
                 setHasTelegramLinked(updated !== '');
                 setShowChannelModal(false);
-                alert(
+                showAlert(
                     updated
                         ? '✅ 채널 연동 정보가 저장되었습니다.'
-                        : '연동이 해제되었습니다.'
+                        : '연동이 해제되었습니다.',
+                    'success'
                 );
             } else {
-                alert(result.error || '설정 저장에 실패했습니다.');
+                showAlert(result.error || '설정 저장에 실패했습니다.', 'error');
             }
         } catch (e) {
-            alert('통신 오류가 발생했습니다.');
+            showAlert('통신 오류가 발생했습니다.', 'error');
         } finally {
             setSavingChannel(false);
         }
@@ -369,7 +388,7 @@ export default function FeedDirectory({
 
         // 🚀 1. 직접 등록(manual)일 때 텔레그램이 미연동 상태라면 설정 모달을 먼저 띄워 유도!
         if (f.id === 'manual' && !hasTelegramLinked) {
-            alert('알림을 수신할 Telegram Chat ID를 먼저 연동해 주세요.');
+            showAlert('알림을 수신할 Telegram Chat ID를 먼저 연동해 주세요.', 'info');
             setTgInputId(tgChatId);
             setShowChannelModal(true);
             return;
@@ -408,8 +427,9 @@ export default function FeedDirectory({
             let processUrl = f.url.trim();
 
             if (!processUrl.startsWith('http') && !processUrl.startsWith('https')) {
-                alert(
-                    '🚨 URL 형식이 아닙니다. 인스타 또는 X 계정이라면 입력창 우측의 [📷 인스타 변환] 또는 [𝕏 X 변환] 버튼을 먼저 눌러서 주소를 완성해 주세요!'
+                showAlert(
+                    '🚨 URL 형식이 아닙니다. 인스타 또는 X 계정이라면 입력창 우측의 [📷 인스타 변환] 또는 [𝕏 X 변환] 버튼을 먼저 눌러서 주소를 완성해 주세요!',
+                    'error'
                 );
                 throw new Error('URL 변환이 필요합니다.');
             }
@@ -423,7 +443,15 @@ export default function FeedDirectory({
             const finalFeedUrl = d.feedUrl || processUrl;
             const finalName = f.name.trim() || d.title || '새 피드';
 
-            onAdd({ id: crypto.randomUUID(), name: finalName, url: finalFeedUrl, category: target });
+            onAdd({
+                id: crypto.randomUUID(),
+                name: finalName,
+                url: finalFeedUrl,
+                category: target,
+                frequency: f.id === 'manual' ? frequency : '360',
+                aiPromptCode: f.id === 'manual' ? aiPromptCode : 'DEFAULT',
+                customPrompt: f.id === 'manual' ? customPrompt : '',
+            } as any);
             added.current.add(normalized);
 
             if (f.id === 'manual') {
@@ -758,7 +786,7 @@ export default function FeedDirectory({
                                 <button
                                     type="button"
                                     onClick={() =>
-                                        alert('디스코드 웹훅 연동은 추후 지원될 PRO 기능입니다.')
+                                        showAlert('디스코드 웹훅 연동은 추후 지원될 PRO 기능입니다.', 'info')
                                     }
                                     style={{
                                         display: 'inline-flex',
@@ -792,7 +820,7 @@ export default function FeedDirectory({
                                 <button
                                     type="button"
                                     onClick={() =>
-                                        alert('이메일 뉴스레터 발송은 추후 지원될 PRO 기능입니다.')
+                                        showAlert('이메일 뉴스레터 발송은 추후 지원될 PRO 기능입니다.', 'info')
                                     }
                                     style={{
                                         display: 'inline-flex',
@@ -1297,6 +1325,14 @@ export default function FeedDirectory({
                     </div>
                 )}
             </section>
+
+            {/* 🎨 피드AI 전용 모달 알림창 */}
+            <AlertModal
+                isOpen={alertState.isOpen}
+                message={alertState.message}
+                type={alertState.type}
+                onClose={() => setAlertState(prev => ({ ...prev, isOpen: false }))}
+            />
         </div>
     );
 }
