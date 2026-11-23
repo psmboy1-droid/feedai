@@ -72,9 +72,11 @@ export function decodeHtmlEntities(text: string): string {
 }
 
 // ─── YouTube 썸네일 컴포넌트 ───────────────────────────────────────────────
-function VideoThumbnail({ videoId }: { videoId: string }) {
+function VideoThumbnail({ videoId, isShorts }: { videoId: string; isShorts?: boolean }) {
   const [attempt, setAttempt] = useState(0);
-  const variants = ['maxresdefault.jpg', 'sddefault.jpg', 'hqdefault.jpg'];
+  const variants = isShorts
+    ? ['oar2.jpg', 'maxresdefault.jpg', 'sddefault.jpg', 'hqdefault.jpg']
+    : ['maxresdefault.jpg', 'sddefault.jpg', 'hqdefault.jpg'];
   function fallback() { setAttempt(cur => cur + 1); }
   if (attempt >= variants.length) return <span className="dopamine-thumbnail-missing">썸네일 이미지 없음</span>;
   return (
@@ -84,6 +86,7 @@ function VideoThumbnail({ videoId }: { videoId: string }) {
       alt=""
       loading="lazy"
       decoding="async"
+      referrerPolicy="no-referrer"
       onError={fallback}
       onLoad={ev => {
         const img = ev.currentTarget;
@@ -122,11 +125,7 @@ function YoutubeCard({ item, playing, onPlay, isWide }: {
             onClick={() => onPlay(item.video_id)}
             aria-label={`${decodedTitle} 재생`}
           >
-            {item.thumbnail_url ? (
-              <img src={item.thumbnail_url} alt="" loading="lazy" decoding="async" />
-            ) : (
-              <VideoThumbnail videoId={rawId} />
-            )}
+            <VideoThumbnail videoId={rawId} isShorts={!isWide} />
             <span className="dopamine-play-symbol"><Play size={32} fill="currentColor" /></span>
             <span className="dopamine-kind">{isWide ? 'YouTube' : 'Shorts'}</span>
           </button>
@@ -138,18 +137,31 @@ function YoutubeCard({ item, playing, onPlay, isWide }: {
 }
 
 // ─── 카드: TikTok / Instagram ─────────────────────────────────────────────
-function SocialCard({ item, platform }: { item: VideoItem; platform: Platform }) {
-  const [inlinePlay, setInlinePlay] = useState(false);
+function SocialCard({
+  item,
+  platform,
+  playing,
+  onPlay,
+}: {
+  item: VideoItem;
+  platform: Platform;
+  playing: string;
+  onPlay: (id: string) => void;
+}) {
   const [fallbackLink, setFallbackLink] = useState(false);
+  const [thumbError, setThumbError] = useState(false);
   const label = platform === 'instagram' ? '인스타그램' : 'TikTok';
   const decodedTitle = decodeHtmlEntities(item.title);
+  const isPlaying = playing === item.video_id;
 
-  if (inlinePlay && !fallbackLink) {
+  if (isPlaying && !fallbackLink) {
     return (
-      <article className="dopamine-card">
+      <article className="dopamine-card dopamine-card-social">
         <div className="dopamine-media">
           <video
             src={item.play_url}
+            poster={item.thumbnail_url || undefined}
+            preload="metadata"
             controls
             autoPlay
             playsInline
@@ -163,10 +175,20 @@ function SocialCard({ item, platform }: { item: VideoItem; platform: Platform })
 
   if (fallbackLink) {
     return (
-      <article className="dopamine-card">
+      <article className="dopamine-card dopamine-card-social">
         <div className="dopamine-media">
           <a href={item.play_url} target="_blank" rel="noopener noreferrer" className="dopamine-external-link">
-            {item.thumbnail_url && <img src={item.thumbnail_url} alt={decodedTitle} loading="lazy" />}
+            {item.thumbnail_url && !thumbError ? (
+              <img
+                src={item.thumbnail_url}
+                alt={decodedTitle}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                onError={() => setThumbError(true)}
+              />
+            ) : (
+              <span className="dopamine-thumbnail-missing">썸네일 로드 불가 · 클릭해 재생</span>
+            )}
             <span className="dopamine-play-symbol"><Play size={32} fill="currentColor" /></span>
             <span className="dopamine-kind">{label} ↗</span>
           </a>
@@ -177,17 +199,24 @@ function SocialCard({ item, platform }: { item: VideoItem; platform: Platform })
   }
 
   return (
-    <article className="dopamine-card">
+    <article className="dopamine-card dopamine-card-social">
       <div className="dopamine-media">
         <button
           className="dopamine-play"
-          onClick={() => setInlinePlay(true)}
+          onClick={() => onPlay(item.video_id)}
           aria-label={`${decodedTitle} 재생`}
         >
-          {item.thumbnail_url ? (
-            <img src={item.thumbnail_url} alt={decodedTitle} loading="lazy" decoding="async" />
+          {item.thumbnail_url && !thumbError ? (
+            <img
+              src={item.thumbnail_url}
+              alt={decodedTitle}
+              loading="lazy"
+              decoding="async"
+              referrerPolicy="no-referrer"
+              onError={() => setThumbError(true)}
+            />
           ) : (
-            <span className="dopamine-thumbnail-missing">썸네일 없음</span>
+            <span className="dopamine-thumbnail-missing">썸네일 로드 불가 · 클릭해 재생</span>
           )}
           <span className="dopamine-play-symbol"><Play size={32} fill="currentColor" /></span>
           <span className="dopamine-kind">{label}</span>
@@ -496,7 +525,15 @@ export default function DopamineCenter({ platform = 'youtube' }: { platform?: Pl
                     />
                   );
                 }
-                return <SocialCard key={item.id} item={item} platform={item.platform} />;
+                return (
+                  <SocialCard
+                    key={item.id}
+                    item={item}
+                    platform={item.platform}
+                    playing={playing}
+                    onPlay={setPlaying}
+                  />
+                );
               })}
             </div>
 

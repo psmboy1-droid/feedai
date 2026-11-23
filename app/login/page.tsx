@@ -60,10 +60,8 @@ export default function LoginPage() {
                 
                 {/* 헤더 섹션 */}
                 <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-                    <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginBottom: '8px' }}>
-                        <div style={{ backgroundColor: '#2563eb', color: 'white', borderRadius: '8px', padding: '6px', display: 'flex' }}>
-                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>
-                        </div>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '10px', marginBottom: '8px' }}>
+                        <img src="/feedai-logo.png" alt="피드AI 로고" style={{ width: '38px', height: '38px', borderRadius: '9px', objectFit: 'cover' }} />
                         <h1 style={{ fontSize: '28px', fontWeight: '900', color: '#111827', margin: 0, letterSpacing: '-0.5px' }}>
                             피드AI
                         </h1>

@@ -502,7 +502,7 @@ export default function FeedDirectory({
                 <header className="directory-header">
                     <div className="directory-heading">
                         <span className="brand-icon">
-                            <Rss size={21} />
+                            <img src="/feedai-logo.png" alt="피드AI 로고" style={{ width: '100%', height: '100%', borderRadius: '9px', objectFit: 'cover' }} />
                         </span>
                         <div>
                             <h2 id="directory-title">피드 소스 찾기</h2>

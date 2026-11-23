@@ -196,7 +196,7 @@ async function collectYoutube(keyword: string, country: Country, limit: number):
         shortsVideos.push({
             video_id:      compositeId,
             title:         safeTitle(cand.item.snippet?.title),
-            thumbnail_url: cand.item.snippet?.thumbnails?.high?.url || cand.item.snippet?.thumbnails?.default?.url || '',
+            thumbnail_url: `https://i.ytimg.com/vi/${cand.videoId}/maxresdefault.jpg`,
             platform:      'youtube',
             country,
             play_url:      `https://www.youtube.com/embed/${cand.videoId}`,
@@ -238,7 +238,7 @@ async function collectYoutube(keyword: string, country: Country, limit: number):
             regularVideos.push({
                 video_id:      compositeId,
                 title:         safeTitle(item.snippet?.title),
-                thumbnail_url: item.snippet?.thumbnails?.high?.url || item.snippet?.thumbnails?.default?.url || '',
+                thumbnail_url: `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
                 platform:      'youtube',
                 country,
                 play_url:      `https://www.youtube.com/embed/${videoId}`,

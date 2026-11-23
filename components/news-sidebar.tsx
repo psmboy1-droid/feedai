@@ -217,7 +217,7 @@ export default function NewsSidebar({
         <aside className={mobile ? 'sidebar show' : 'sidebar'}>
             <a className="brand" href={user ? '/my-feed' : '/'} aria-label="피드AI 홈">
                 <span className="brand-icon">
-                    <Rss size={21} />
+                    <img src="/feedai-logo.png" alt="피드AI 로고" style={{ width: '100%', height: '100%', borderRadius: '9px', objectFit: 'cover' }} />
                 </span>
                 피드AI
             </a>
