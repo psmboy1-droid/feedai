@@ -116,3 +116,673 @@
 .sidebar-profile-link>svg{color:#475569;flex-shrink:0}
 .sidebar-profile-link:hover{color:#2563eb}
 .sidebar-profile-link:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:4px}
+
+
+/* Dopamine Admin UI */
+.dopamine-admin-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid #dce2eb;
+}
+
+.dopamine-admin-tabs button {
+  padding: 11px 20px;
+  font-weight: 600;
+  font-size: 14px;
+  color: #475569;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  transition: all 0.15s ease;
+}
+
+.dopamine-admin-tabs button:hover {
+  color: #2563eb;
+  background: #f8fafc;
+}
+
+.dopamine-admin-tabs button.selected {
+  color: #2563eb;
+  border-bottom: 2px solid #2563eb;
+  background: #eff6ff;
+}
+
+.dopamine-admin-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.dopamine-admin-notice {
+  background: #eff6ff;
+  color: #1e40af;
+  border: 1px solid #bfdbfe;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 18px;
+}
+
+.dopamine-admin .admin-error {
+  margin-bottom: 18px;
+}
+
+/* 탭 1 — 설정 카드 그리드 */
+.dopamine-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+@media (max-width: 960px) {
+  .dopamine-settings-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .dopamine-settings-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.dopamine-setting-row {
+  background: #fff;
+  border: 1px solid #dce2eb;
+  border-radius: 12px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+}
+
+.dopamine-setting-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dopamine-setting-header strong {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.dopamine-country-badge {
+  background: #eff6ff;
+  color: #2563eb;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.dopamine-video-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: #475569;
+  background: #f1f5f9;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.dopamine-setting-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dopamine-setting-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.dopamine-setting-fields input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  box-sizing: border-box;
+  font-size: 13px;
+}
+
+.dopamine-setting-fields input:focus {
+  outline: 2px solid #2563eb;
+  outline-offset: -1px;
+  border-color: #2563eb;
+}
+
+.dopamine-setting-row .dopamine-admin-actions {
+  margin-top: auto;
+  padding-top: 6px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dopamine-setting-row .dopamine-admin-actions button {
+  padding: 8px 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  background: #fff;
+  color: #334155;
+}
+
+.dopamine-setting-row .dopamine-admin-actions button:hover {
+  background: #f8fafc;
+}
+
+.dopamine-setting-row .dopamine-admin-actions .refresh {
+  background: #2563eb;
+  color: #fff;
+  border-color: #2563eb;
+  font-weight: 600;
+}
+
+.dopamine-setting-row .dopamine-admin-actions .refresh:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+/* 탭 2 — 광고 등록 폼 & 광고 목록 */
+.dopamine-ad-form {
+  background: #fff;
+  border: 1px solid #dce2eb;
+  border-radius: 14px;
+  padding: 24px;
+  margin: 14px 0 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+}
+
+.dopamine-ad-form-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 600px) {
+  .dopamine-ad-form-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.dopamine-ad-form label:not(.dopamine-check) {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.dopamine-ad-form input:not([type=checkbox]),
+.dopamine-ad-form select {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  box-sizing: border-box;
+  font-size: 13px;
+}
+
+.dopamine-ad-form input:not([type=checkbox]):focus,
+.dopamine-ad-form select:focus {
+  outline: 2px solid #2563eb;
+  outline-offset: -1px;
+  border-color: #2563eb;
+}
+
+.dopamine-ad-form .dopamine-check {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #334155;
+  user-select: none;
+}
+
+.dopamine-ad-form .dopamine-check input[type=checkbox] {
+  accent-color: #2563eb;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.dopamine-ad-form .dopamine-admin-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.dopamine-ad-form .dopamine-admin-actions button {
+  padding: 10px 18px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  background: #fff;
+  color: #334155;
+}
+
+.dopamine-ad-form .dopamine-admin-actions .refresh {
+  background: #2563eb;
+  color: #fff;
+  border-color: #2563eb;
+}
+
+.dopamine-ad-form .dopamine-admin-actions .refresh:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+.dopamine-ad-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.dopamine-ad-row {
+  background: #fff;
+  border: 1px solid #dce2eb;
+  border-radius: 12px;
+  padding: 16px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+}
+
+@media (max-width: 600px) {
+  .dopamine-ad-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+.dopamine-ad-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.dopamine-ad-info strong {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dopamine-ad-meta {
+  font-size: 12px;
+  color: #2563eb;
+  font-weight: 600;
+}
+
+.dopamine-ad-info .dopamine-source-url {
+  font-size: 11px;
+  color: #64748b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.dopamine-ad-row .dopamine-admin-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.dopamine-ad-row .dopamine-admin-actions button {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #334155;
+}
+
+.dopamine-toggle-on {
+  background: #dcfce7 !important;
+  color: #166534 !important;
+  border-color: #86efac !important;
+  font-weight: 700 !important;
+}
+
+.dopamine-toggle-off {
+  background: #f1f5f9 !important;
+  color: #64748b !important;
+  border-color: #cbd5e1 !important;
+  font-weight: 600 !important;
+}
+
+.dopamine-ad-row .dopamine-delete {
+  background: #fef2f2 !important;
+  color: #b91c1c !important;
+  border-color: #fecaca !important;
+  font-weight: 600 !important;
+}
+
+.dopamine-ad-row .dopamine-delete:hover {
+  background: #fee2e2 !important;
+}
+
+
+/* Dopamine Admin — R2 Storage & Upload UI */
+
+/* 저장소 사용량 바 */
+.dopamine-storage-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 18px;
+  background: #f8fafc;
+  border: 1px solid #dce2eb;
+  border-radius: 10px;
+  margin-bottom: 20px;
+  font-size: 12px;
+  color: #334155;
+}
+
+.dopamine-storage-bar strong {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.dopamine-storage-track {
+  height: 8px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.dopamine-storage-fill {
+  height: 100%;
+  background: #2563eb;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.dopamine-storage-bar.warn .dopamine-storage-fill {
+  background: #f59e0b;
+}
+
+.dopamine-storage-bar.warn {
+  border-color: #fcd34d;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.dopamine-storage-bar.danger .dopamine-storage-fill {
+  background: #ef4444;
+}
+
+.dopamine-storage-bar.danger {
+  border-color: #fca5a5;
+  background: #fff1f2;
+  color: #991b1b;
+}
+
+/* 미디어 URL 행 — 입력칸 + 업로드 버튼 나란히 */
+.dopamine-upload-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.dopamine-upload-row input[type="url"] {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.dopamine-upload-row input[type="url"]:focus {
+  outline: 2px solid #2563eb;
+  outline-offset: -1px;
+  border-color: #2563eb;
+}
+
+/* 파일 업로드 버튼 */
+.dopamine-upload-btn {
+  flex-shrink: 0;
+  padding: 9px 14px;
+  background: #eff6ff;
+  color: #2563eb;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.dopamine-upload-btn:hover:not(:disabled) {
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.dopamine-upload-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 미디어 미리보기 */
+.dopamine-media-preview {
+  margin-top: 8px;
+  border: 1px solid #dce2eb;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f1f5f9;
+  max-width: 320px;
+}
+
+.dopamine-media-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 180px;
+  object-fit: contain;
+}
+
+.dopamine-media-preview video {
+  display: block;
+  width: 100%;
+  max-height: 180px;
+  background: #000;
+}
+
+@media (max-width: 600px) {
+  .dopamine-upload-row {
+    flex-direction: column;
+  }
+  .dopamine-upload-btn {
+    width: 100%;
+    text-align: center;
+  }
+  .dopamine-media-preview {
+    max-width: 100%;
+  }
+}
+
+
+/* ─── 도파민 센터 쇼츠/일반 영상 서브 탭 ─────────────────────────────────── */
+.dopamine-subtabs {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 24px;
+}
+
+.dopamine-subtabs button {
+  padding: 7px 18px;
+  border-radius: 20px;
+  border: 1px solid #dce2eb;
+  background: #fff;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.dopamine-subtabs button:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #1e293b;
+}
+
+.dopamine-subtabs button.selected {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25);
+}
+
+/* ─── 가로형 16:9 그리드 (YouTube 일반 영상) ────────────────────────────── */
+.dopamine-grid-wide {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.dopamine-grid-wide .dopamine-media {
+  aspect-ratio: 16 / 9;
+}
+
+@media (max-width: 900px) {
+  .dopamine-grid-wide {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .dopamine-grid-wide {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ─── AD 광고 카드 레이아웃 & 동영상/이미지 ──────────────────────────────── */
+.dopamine-card-ad {
+  position: relative;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.dopamine-card-ad .dopamine-media {
+  position: relative;
+  overflow: hidden;
+  background: #111;
+}
+
+.dopamine-ad-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 3;
+  background: rgba(17, 24, 39, 0.78);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 999px;
+  line-height: 1.2;
+  pointer-events: none;
+}
+
+.dopamine-ad-link {
+  display: block;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.dopamine-ad-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(18px) brightness(0.75);
+  transform: scale(1.12);
+  pointer-events: none;
+}
+
+.dopamine-ad-img {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.dopamine-ad-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.dopamine-ad-cta {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 11px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(37, 99, 235, 0.9);
+  backdrop-filter: blur(6px);
+  border-radius: 14px;
+  text-decoration: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.dopamine-ad-cta:hover {
+  background: #1d4ed8;
+  transform: translateY(-1px);
+}

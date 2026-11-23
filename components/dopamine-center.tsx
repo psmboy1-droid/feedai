@@ -1,28 +1,523 @@
 'use client';
-import {useEffect,useRef,useState} from 'react';
-import {Play,Clock,ArrowUpRight,Play as Youtube,RefreshCw,Camera as Instagram,Music2} from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Play, RefreshCw, ArrowUpRight, Camera as Instagram, Music2, Play as Youtube } from 'lucide-react';
 import TopMenu from './top-menu';
-import {useNewsAccount} from './news-account';
-import {alternatingVideoRows,DOPAMINE_HOUR,type DopamineVideo} from '../lib/dopamine-feed';
-type Listing={videos:DopamineVideo[];sourceCount:number;checkedAt:number;nextCheckAt:number;failedSources:number;pendingSources:number};
-const countries=[['KR','한국'],['JP','일본'],['US','세계']];
-const date=(ms:number)=>new Date(ms).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
-function VideoThumbnail({videoId}:{videoId:string}){
- const [attempt,setAttempt]=useState(0);
- const variants=['maxresdefault.jpg','sddefault.jpg','hqdefault.jpg'];
- function fallback(){setAttempt(current=>current===attempt?current+1:current)}
- if(attempt>=variants.length)return <span className="dopamine-thumbnail-missing">미리보기 이미지 없음</span>;
- return <img key={attempt} src={'https://i.ytimg.com/vi/'+videoId+'/'+variants[attempt]} alt="" loading="lazy" decoding="async" onError={fallback} onLoad={event=>{const image=event.currentTarget;if(image.naturalWidth<=120||image.naturalHeight<=90)fallback()}}/>;
+import { useNewsAccount } from './news-account';
+
+// ─── 타입 ─────────────────────────────────────────────────────────────────
+type Platform = 'youtube' | 'instagram' | 'tiktok';
+type Country  = 'KR' | 'US' | 'JP';
+type VideoType = 'shorts' | 'video';
+
+interface VideoItem {
+  id: string;
+  video_id: string;
+  title: string;
+  thumbnail_url: string;
+  platform: Platform;
+  country: Country;
+  play_url: string;
+  rank_order: number;
+  isAd: false;
+  displayRank: number;
 }
-export default function DopamineCenter({platform="youtube"}:{platform?:"youtube"|"instagram"|"tiktok"}){const account=useNewsAccount(),[country,setCountry]=useState('KR'),[data,setData]=useState<Listing|null>(null),[error,setError]=useState(''),[loading,setLoading]=useState(true),[page,setPage]=useState(1),[playing,setPlaying]=useState('');const [retry,setRetry]=useState(0),received=useRef(0);
- useEffect(()=>{if(platform!=="youtube"){setLoading(false);setData(null);setError("");return}let live=true,busy=false,timer:ReturnType<typeof setTimeout>|undefined;const abort=new AbortController();setData(null);setError('');setLoading(true);setPlaying('');setPage(1);
- async function load(){if(busy||!live)return;busy=true;try{const r=await fetch('/api/dopamine?country='+country,{cache:'no-store',signal:abort.signal});const d=await r.json() as Listing&{error?:string};if(!r.ok)throw Error(d.error||'영상을 불러오지 못했습니다.');if(live){setData(d);setError('');received.current=Date.now();const delay=d.pendingSources>0?5000:d.nextCheckAt?Math.min(DOPAMINE_HOUR,Math.max(60000,d.nextCheckAt-Date.now())):DOPAMINE_HOUR;timer=setTimeout(()=>void load(),delay)}}catch(e){if(live){setError(e instanceof Error?e.message:'영상 연결 실패');timer=setTimeout(()=>void load(),60000)}}finally{busy=false;if(live)setLoading(false)}}
- function focus(){if(Date.now()-received.current>=DOPAMINE_HOUR){if(timer)clearTimeout(timer);void load()}}void load();window.addEventListener('focus',focus);return()=>{live=false;abort.abort();if(timer)clearTimeout(timer);window.removeEventListener('focus',focus)}},[country,retry,platform]);
- const shorts=data?.videos.filter(v=>v.kind==='shorts').length||0,regular=(data?.videos.length||0)-shorts;
- const pageCount=Math.max(1,Math.ceil(Math.max(shorts,regular)/9)),currentPage=Math.min(page,pageCount),offset=(currentPage-1)*9;
- const pageVideos=['shorts','video'].flatMap(kind=>(data?.videos||[]).filter(v=>v.kind===kind).slice(offset,offset+9));
- const rows=alternatingVideoRows(pageVideos,3),pageStart=Math.floor((currentPage-1)/5)*5+1;
- useEffect(()=>{if(page>pageCount){setPage(pageCount);setPlaying('')}},[page,pageCount]);
- function goToPage(next:number){setPage(next);setPlaying('');document.querySelector('.dopamine-feed')?.scrollIntoView({block:'start',behavior:'smooth'})}
- return <div className="dopamine-page"><header className="topbar"><TopMenu/></header><main className="dopamine-main"><div className="dopamine-intro"><div><p>TAKE A LITTLE BREAK</p><h1>도파민 센터<span>지금, 재밌는 것만.</span></h1></div>{platform==='youtube'&&account.user?.admin&&<a className="dopamine-admin-link" href="/admin/dopamine">유튜브 피드 관리 <ArrowUpRight size={14}/></a>}</div><nav className="dopamine-country" aria-label="국가별 영상">{countries.map(([id,label])=><button key={id} type="button" className={country===id?'selected':''} onClick={()=>setCountry(id)} aria-pressed={country===id}>{label}</button>)}</nav><nav className="dopamine-platform" aria-label="영상 플랫폼"><a href="/dopamine" className={platform==='youtube'?'selected':''} aria-current={platform==='youtube'?'page':undefined}><Youtube size={20}/> YouTube</a><a href="/dopamine/instagram" className={platform==='instagram'?'selected':''} aria-current={platform==='instagram'?'page':undefined}><Instagram size={20}/> 인스타그램</a><a href="/dopamine/tiktok" className={platform==='tiktok'?'selected':''} aria-current={platform==='tiktok'?'page':undefined}><Music2 size={20}/> 틱톡</a>{platform==='youtube'&&<p><Clock size={13}/> 1시간마다 새 영상 확인</p>}</nav>{platform!=='youtube'&&<section className="dopamine-empty"><span>{platform==='instagram'?<Instagram size={38}/>:<Music2 size={38}/>}</span><h2>{countries.find(([id])=>id===country)?.[1]} {platform==='instagram'?'인스타그램':'틱톡'}</h2><p>아직 등록된 콘텐츠가 없습니다.</p></section>}<div hidden={platform!=='youtube'} className="dopamine-status" aria-live="polite"><span>쇼츠 {shorts}개 · 일반 영상 {regular}개{data?.checkedAt?' · 최근 수집 '+date(data.checkedAt):''}</span>{data?.failedSources? <span className="dopamine-warning">{data.failedSources}개 피드 연결 실패 · 이전 영상 유지</span>:null}</div>{error&&<div className="dopamine-error" role="alert">{error}<button onClick={()=>setRetry(n=>n+1)}>다시 시도</button></div>}{loading&&!data&&<div className="dopamine-empty" role="status"><RefreshCw className="spin"/><h2>새로운 영상을 모으고 있어요</h2></div>}{!loading&&data&&!data.videos.length&&<div className="dopamine-empty"><Youtube size={38}/><h2>{data.sourceCount?'아직 수집된 영상이 없습니다':'아직 등록된 유튜브 피드가 없습니다'}</h2><p>{data.sourceCount?'피드 연결 상태를 확인하거나 잠시 후 다시 방문해 주세요.':'관리자가 피드를 등록하면 이곳에서 최신 영상을 바로 볼 수 있습니다.'}</p>{account.user?.admin&&<a href="/admin/dopamine">첫 유튜브 피드 등록하기</a>}</div>}<div className="dopamine-feed">{rows.map((row,index)=><section className={'dopamine-row '+row.kind} key={row.kind+index} aria-label={(index+1)+'번째 줄 '+(row.kind==='shorts'?'쇼츠':'일반 영상')}><div className="dopamine-row-heading"><h2>{row.kind==='shorts'?'SHORTS':'VIDEOS'} <span>{row.kind==='shorts'?'짧고 강렬하게':'여유롭게, 한 편'}</span></h2><span>{String(index+1).padStart(2,'0')}</span></div><div className="dopamine-grid">{row.items.map(video=><article className="dopamine-card" key={video.id}><div className="dopamine-media">{playing===video.videoId?<iframe title={video.title} src={'https://www.youtube-nocookie.com/embed/'+video.videoId+'?autoplay=1&rel=0'} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin"/>:<button className="dopamine-play" onClick={()=>setPlaying(video.videoId)} aria-label={video.title+' 재생'}><VideoThumbnail key={video.videoId} videoId={video.videoId}/><span className="dopamine-play-symbol"><Play size={32} fill="currentColor"/></span><span className="dopamine-kind">{row.kind==='shorts'?'Shorts':'YouTube'}</span></button>}</div></article>)}{Array.from({length:3-row.items.length},(_,i)=><div className="dopamine-card dopamine-placeholder" key={'empty'+i}><span>{row.kind==='shorts'?'새 쇼츠를 기다리고 있어요':'새 영상을 기다리고 있어요'}</span></div>)}</div></section>)}</div>{data&&data.videos.length>0&&<nav className="dopamine-pagination" aria-label="영상 페이지">{pageStart>1&&<button onClick={()=>goToPage(pageStart-1)} aria-label="이전 페이지 묶음">이전</button>}{Array.from({length:Math.min(5,pageCount-pageStart+1)},(_,i)=>pageStart+i).map(n=><button key={n} className={n===currentPage?'selected':''} aria-current={n===currentPage?'page':undefined} onClick={()=>goToPage(n)}>{n}</button>)}{pageStart+4<pageCount&&<button onClick={()=>goToPage(pageStart+5)} aria-label="다음 페이지 묶음">다음</button>}</nav>}<p hidden={platform!=='youtube'} className="dopamine-footnote">영상은 YouTube 플레이어에서 재생됩니다. 게시자가 외부 재생을 제한한 영상은 플레이어의 YouTube 링크를 이용해 주세요.</p></main></div>
+
+interface AdItem {
+  id: string;
+  platform: Platform;
+  country: string;
+  slot_position: number;
+  media_type: 'image' | 'video';
+  title: string;
+  media_url: string;
+  thumbnail_url: string;
+  link_url: string;
+  is_active: boolean;
+  isAd: true;
+  displayRank: number;
+}
+
+type FeedItem = VideoItem | AdItem;
+
+interface ApiResponse {
+  items: FeedItem[];
+  total: number;
+  displayLimit: number;
+  checkedAt: number;
+  error?: string;
+}
+
+// ─── 상수 ──────────────────────────────────────────────────────────────────
+const COUNTRIES: [Country, string][] = [['KR', '한국'], ['US', '미국'], ['JP', '일본']];
+const PAGE_SIZE = 20;
+
+// ─── HTML 엔티티 디코더 ───────────────────────────────────────────────────
+export function decodeHtmlEntities(text: string): string {
+  if (!text || typeof text !== 'string') return '';
+  return text
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#(\d+);/g, (_, dec) => {
+      const code = parseInt(dec, 10);
+      return Number.isFinite(code) ? String.fromCharCode(code) : _;
+    })
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
+      const code = parseInt(hex, 16);
+      return Number.isFinite(code) ? String.fromCharCode(code) : _;
+    })
+    .replace(/&amp;/g, '&');
+}
+
+// ─── YouTube 썸네일 컴포넌트 ───────────────────────────────────────────────
+function VideoThumbnail({ videoId }: { videoId: string }) {
+  const [attempt, setAttempt] = useState(0);
+  const variants = ['maxresdefault.jpg', 'sddefault.jpg', 'hqdefault.jpg'];
+  function fallback() { setAttempt(cur => cur + 1); }
+  if (attempt >= variants.length) return <span className="dopamine-thumbnail-missing">썸네일 이미지 없음</span>;
+  return (
+    <img
+      key={attempt}
+      src={`https://i.ytimg.com/vi/${videoId}/${variants[attempt]}`}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      onError={fallback}
+      onLoad={ev => {
+        const img = ev.currentTarget;
+        if (img.naturalWidth <= 120 || img.naturalHeight <= 90) fallback();
+      }}
+    />
+  );
+}
+
+// ─── 카드: YouTube ────────────────────────────────────────────────────────
+function YoutubeCard({ item, playing, onPlay, isWide }: {
+  item: VideoItem;
+  playing: string;
+  onPlay: (id: string) => void;
+  isWide?: boolean;
+}) {
+  // video_id 형식: "rawId_KR" — 접미사 제거
+  const rawId = item.video_id.replace(/_[A-Z]{2}$/, '');
+  const isPlaying = playing === item.video_id;
+  const decodedTitle = decodeHtmlEntities(item.title);
+
+  return (
+    <article className="dopamine-card">
+      <div className="dopamine-media">
+        {isPlaying ? (
+          <iframe
+            title={decodedTitle}
+            src={`https://www.youtube-nocookie.com/embed/${rawId}?autoplay=1&rel=0`}
+            allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+            allowFullScreen
+            referrerPolicy="strict-origin-when-cross-origin"
+          />
+        ) : (
+          <button
+            className="dopamine-play"
+            onClick={() => onPlay(item.video_id)}
+            aria-label={`${decodedTitle} 재생`}
+          >
+            {item.thumbnail_url ? (
+              <img src={item.thumbnail_url} alt="" loading="lazy" decoding="async" />
+            ) : (
+              <VideoThumbnail videoId={rawId} />
+            )}
+            <span className="dopamine-play-symbol"><Play size={32} fill="currentColor" /></span>
+            <span className="dopamine-kind">{isWide ? 'YouTube' : 'Shorts'}</span>
+          </button>
+        )}
+      </div>
+      {decodedTitle && <p className="dopamine-card-title">{decodedTitle}</p>}
+    </article>
+  );
+}
+
+// ─── 카드: TikTok / Instagram ─────────────────────────────────────────────
+function SocialCard({ item, platform }: { item: VideoItem; platform: Platform }) {
+  const [inlinePlay, setInlinePlay] = useState(false);
+  const [fallbackLink, setFallbackLink] = useState(false);
+  const label = platform === 'instagram' ? '인스타그램' : 'TikTok';
+  const decodedTitle = decodeHtmlEntities(item.title);
+
+  if (inlinePlay && !fallbackLink) {
+    return (
+      <article className="dopamine-card">
+        <div className="dopamine-media">
+          <video
+            src={item.play_url}
+            controls
+            autoPlay
+            playsInline
+            onError={() => setFallbackLink(true)}
+          />
+        </div>
+        {decodedTitle && <p className="dopamine-card-title">{decodedTitle}</p>}
+      </article>
+    );
+  }
+
+  if (fallbackLink) {
+    return (
+      <article className="dopamine-card">
+        <div className="dopamine-media">
+          <a href={item.play_url} target="_blank" rel="noopener noreferrer" className="dopamine-external-link">
+            {item.thumbnail_url && <img src={item.thumbnail_url} alt={decodedTitle} loading="lazy" />}
+            <span className="dopamine-play-symbol"><Play size={32} fill="currentColor" /></span>
+            <span className="dopamine-kind">{label} ↗</span>
+          </a>
+        </div>
+        {decodedTitle && <p className="dopamine-card-title">{decodedTitle}</p>}
+      </article>
+    );
+  }
+
+  return (
+    <article className="dopamine-card">
+      <div className="dopamine-media">
+        <button
+          className="dopamine-play"
+          onClick={() => setInlinePlay(true)}
+          aria-label={`${decodedTitle} 재생`}
+        >
+          {item.thumbnail_url ? (
+            <img src={item.thumbnail_url} alt={decodedTitle} loading="lazy" decoding="async" />
+          ) : (
+            <span className="dopamine-thumbnail-missing">썸네일 없음</span>
+          )}
+          <span className="dopamine-play-symbol"><Play size={32} fill="currentColor" /></span>
+          <span className="dopamine-kind">{label}</span>
+        </button>
+      </div>
+      {decodedTitle && <p className="dopamine-card-title">{decodedTitle}</p>}
+    </article>
+  );
+}
+
+// ─── 카드: 광고 ───────────────────────────────────────────────────────────
+function AdCard({ item }: { item: AdItem }) {
+  const isYoutubeUrl = item.media_url.includes('youtube.com') || item.media_url.includes('youtu.be');
+
+  // YouTube 임베드 URL 정제
+  let ytEmbedUrl = item.media_url;
+  if (isYoutubeUrl) {
+    if (item.media_url.includes('watch?v=')) {
+      const v = new URL(item.media_url).searchParams.get('v');
+      ytEmbedUrl = `https://www.youtube-nocookie.com/embed/${v}`;
+    } else if (item.media_url.includes('youtu.be/')) {
+      const v = item.media_url.split('youtu.be/')[1]?.split('?')[0];
+      ytEmbedUrl = `https://www.youtube-nocookie.com/embed/${v}`;
+    }
+  }
+
+  const isVideo = item.media_type === 'video';
+  const decodedTitle = decodeHtmlEntities(item.title);
+
+  return (
+    <article className="dopamine-card dopamine-card-ad">
+      <div className="dopamine-media">
+        {/* 모든 카드와 동일하게 첫 번째 자식을 .dopamine-media로 통일하고, AD 배지는 내부 좌상단 오버레이 */}
+        <span className="dopamine-ad-badge">AD</span>
+
+        {/* 동영상 광고일 때 우측 상단 바로가기 CTA 칩 */}
+        {isVideo && item.link_url && (
+          <a
+            className="dopamine-ad-cta"
+            href={item.link_url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            바로가기 ↗
+          </a>
+        )}
+
+        {!isVideo ? (
+          // 이미지 광고: 블러 배경 + 원본 비율 중앙 배치
+          item.link_url ? (
+            <a
+              href={item.link_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="dopamine-ad-link"
+            >
+              <img
+                className="dopamine-ad-bg"
+                src={item.media_url}
+                alt=""
+                aria-hidden
+                referrerPolicy="no-referrer"
+              />
+              <img
+                className="dopamine-ad-img"
+                src={item.media_url}
+                alt={decodedTitle}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+              />
+            </a>
+          ) : (
+            <div className="dopamine-ad-link">
+              <img
+                className="dopamine-ad-bg"
+                src={item.media_url}
+                alt=""
+                aria-hidden
+                referrerPolicy="no-referrer"
+              />
+              <img
+                className="dopamine-ad-img"
+                src={item.media_url}
+                alt={decodedTitle}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+              />
+            </div>
+          )
+        ) : isYoutubeUrl ? (
+          <iframe
+            title={decodedTitle}
+            src={ytEmbedUrl}
+            allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+            allowFullScreen
+          />
+        ) : (
+          <video
+            className="dopamine-ad-video"
+            src={item.media_url}
+            poster={item.thumbnail_url || undefined}
+            controls
+            playsInline
+            preload="metadata"
+          />
+        )}
+      </div>
+
+      {decodedTitle && (
+        <p className="dopamine-card-title">
+          {item.link_url ? (
+            <a href={item.link_url} target="_blank" rel="noopener noreferrer">
+              {decodedTitle}
+            </a>
+          ) : (
+            decodedTitle
+          )}
+        </p>
+      )}
+    </article>
+  );
+}
+
+// ─── 메인 컴포넌트 ─────────────────────────────────────────────────────────
+export default function DopamineCenter({ platform = 'youtube' }: { platform?: Platform }) {
+  const account = useNewsAccount();
+  const [country, setCountry] = useState<Country>('KR');
+  const [videoType, setVideoType] = useState<VideoType>('shorts');
+  const [data, setData] = useState<ApiResponse | null>(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [retry, setRetry] = useState(0);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [playing, setPlaying] = useState('');
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const mounted = useRef(true);
+
+  // 국가/플랫폼/비디오타입 변경 시 초기화
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+    setPlaying('');
+  }, [country, platform, videoType]);
+
+  // 데이터 로드
+  useEffect(() => {
+    mounted.current = true;
+    let live = true;
+    setData(null);
+    setError('');
+    setLoading(true);
+
+    async function load() {
+      try {
+        const url = platform === 'youtube'
+          ? `/api/dopamine?platform=youtube&country=${country}&videoType=${videoType}`
+          : `/api/dopamine?platform=${platform}&country=${country}`;
+        const r = await fetch(url, { cache: 'no-store' });
+        const d = await r.json() as ApiResponse;
+        if (!r.ok) throw new Error(d.error || '콘텐츠를 불러오지 못했습니다.');
+        if (live) { setData(d); setError(''); }
+      } catch (e) {
+        if (live) setError(e instanceof Error ? e.message : '콘텐츠 로드 실패');
+      } finally {
+        if (live) setLoading(false);
+      }
+    }
+
+    void load();
+    return () => { live = false; mounted.current = false; };
+  }, [country, platform, videoType, retry]);
+
+  // 무한 스크롤 — IntersectionObserver
+  const allItems = data?.items ?? [];
+  const visibleItems = allItems.slice(0, visibleCount);
+  const hasMore = visibleCount < allItems.length;
+
+  const loadMore = useCallback(() => {
+    setVisibleCount(prev => Math.min(prev + PAGE_SIZE, allItems.length));
+  }, [allItems.length]);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(entries => {
+      if (entries[0]?.isIntersecting && hasMore) loadMore();
+    }, { rootMargin: '200px' });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [hasMore, loadMore]);
+
+  const countryLabel = COUNTRIES.find(([id]) => id === country)?.[1] ?? country;
+  const platformLabel = platform === 'youtube' ? 'YouTube' : platform === 'instagram' ? '인스타그램' : 'TikTok';
+  const PlatformIcon = platform === 'youtube' ? Youtube : platform === 'instagram' ? Instagram : Music2;
+  const isWide = platform === 'youtube' && videoType === 'video';
+
+  return (
+    <div className="dopamine-page">
+      <header className="topbar"><TopMenu /></header>
+      <main className="dopamine-main">
+
+        {/* 소개 헤더 */}
+        <div className="dopamine-intro">
+          <div>
+            <p>TAKE A LITTLE BREAK</p>
+            <h1>도파민 센터<span>지금 가장 핫한 콘텐츠.</span></h1>
+          </div>
+          {account.user?.admin && (
+            <a className="dopamine-admin-link" href="/admin/dopamine">
+              도파민 센터 관리 <ArrowUpRight size={14} />
+            </a>
+          )}
+        </div>
+
+        {/* 국가 탭 */}
+        <nav className="dopamine-country" aria-label="국가별 콘텐츠">
+          {COUNTRIES.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              className={country === id ? 'selected' : ''}
+              onClick={() => setCountry(id)}
+              aria-pressed={country === id}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+
+        {/* 플랫폼 탭 */}
+        <nav className="dopamine-platform" aria-label="플랫폼 선택">
+          <a href="/dopamine" className={platform === 'youtube' ? 'selected' : ''} aria-current={platform === 'youtube' ? 'page' : undefined}>
+            <Youtube size={20} /> YouTube
+          </a>
+          <a href="/dopamine/instagram" className={platform === 'instagram' ? 'selected' : ''} aria-current={platform === 'instagram' ? 'page' : undefined}>
+            <Instagram size={20} /> 인스타그램
+          </a>
+          <a href="/dopamine/tiktok" className={platform === 'tiktok' ? 'selected' : ''} aria-current={platform === 'tiktok' ? 'page' : undefined}>
+            <Music2 size={20} /> 틱톡
+          </a>
+        </nav>
+
+        {/* YouTube 서브 탭 (쇼츠 / 일반 영상) */}
+        {platform === 'youtube' && (
+          <nav className="dopamine-subtabs" aria-label="YouTube 영상 유형 선택">
+            <button
+              type="button"
+              className={videoType === 'shorts' ? 'selected' : ''}
+              onClick={() => setVideoType('shorts')}
+              aria-pressed={videoType === 'shorts'}
+            >
+              쇼츠
+            </button>
+            <button
+              type="button"
+              className={videoType === 'video' ? 'selected' : ''}
+              onClick={() => setVideoType('video')}
+              aria-pressed={videoType === 'video'}
+            >
+              일반 영상
+            </button>
+          </nav>
+        )}
+
+        {/* 로딩 */}
+        {loading && !data && (
+          <div className="dopamine-empty" role="status">
+            <RefreshCw className="spin" />
+            <h2>새로운 콘텐츠를 가져오는 중…</h2>
+          </div>
+        )}
+
+        {/* 에러 */}
+        {error && (
+          <div className="dopamine-error" role="alert">
+            {error}
+            <button onClick={() => setRetry(n => n + 1)}>다시 시도</button>
+          </div>
+        )}
+
+        {/* 비어있음 */}
+        {!loading && !error && data && allItems.length === 0 && (
+          <section className="dopamine-empty">
+            <PlatformIcon size={38} />
+            <h2>{countryLabel} {platformLabel}</h2>
+            <p>아직 수집된 콘텐츠가 없습니다.</p>
+            {account.user?.admin && <a href="/admin/dopamine">관리자에서 수집 시작하기</a>}
+          </section>
+        )}
+
+        {/* 피드 그리드 */}
+        {visibleItems.length > 0 && (
+          <div className="dopamine-feed">
+            <div className={isWide ? 'dopamine-grid dopamine-grid-flat dopamine-grid-wide' : 'dopamine-grid dopamine-grid-flat'}>
+              {visibleItems.map(item => {
+                if (item.isAd) {
+                  return <AdCard key={`ad-${item.id}`} item={item} />;
+                }
+                if (item.platform === 'youtube') {
+                  return (
+                    <YoutubeCard
+                      key={item.id}
+                      item={item}
+                      playing={playing}
+                      onPlay={setPlaying}
+                      isWide={isWide}
+                    />
+                  );
+                }
+                return <SocialCard key={item.id} item={item} platform={item.platform} />;
+              })}
+            </div>
+
+            {/* 무한 스크롤 감지 sentinel */}
+            <div ref={sentinelRef} style={{ height: 1 }} aria-hidden />
+
+            {/* 수동 더보기 버튼 */}
+            {hasMore && (
+              <div className="dopamine-load-more">
+                <button type="button" onClick={loadMore}>
+                  더보기 ({visibleCount}/{allItems.length})
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        <p className="dopamine-footnote">
+          콘텐츠는 각 플랫폼에서 재생됩니다. 재생이 어려울 경우 해당 플랫폼에서 직접 시청해 주세요.
+        </p>
+      </main>
+    </div>
+  );
 }
