@@ -3,6 +3,7 @@ import Script from 'next/script';
 import { publicSeo } from '../lib/seo-settings';
 import { seoMetadata } from '../lib/seo-config';
 import './globals.css';
+import { VisitTracker } from '../components/visit-tracker';
 import { NewsAccountProvider } from '../components/news-account';
 import WorkspaceShell from '../components/workspace-shell';
 
@@ -38,6 +39,7 @@ export default function RootLayout({
             </Script>
           </>
         )}
+        <VisitTracker />
         <NewsAccountProvider>
           <WorkspaceShell>{children}</WorkspaceShell>
         </NewsAccountProvider>

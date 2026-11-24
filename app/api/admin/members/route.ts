@@ -2,6 +2,7 @@ import { isRssAdmin, isAdminEmail } from '../../../../lib/rss-admin';
 import { getChatGPTUser } from '../../../chatgpt-auth';
 import { z } from 'zod';
 import { createClient } from '@supabase/supabase-js';
+import { deleteFromR2ByUrl } from '../../../../lib/r2';
 
 export const dynamic = 'force-dynamic';
 
@@ -154,7 +155,31 @@ export async function DELETE(req: Request) {
         
         if (d.userId === user?.userId) return reply({ error: '현재 관리자 계정은 삭제할 수 없습니다.' }, 400);
 
+        // 회원의 커뮤니티 게시글 첨부 이미지 R2 정리
+        try {
+            const { data: userPosts } = await supabase
+                .from('community_posts')
+                .select('image_urls')
+                .eq('author_id', d.userId);
+
+            if (userPosts && userPosts.length > 0) {
+                for (const p of userPosts) {
+                    const urls: string[] = Array.isArray(p.image_urls) ? p.image_urls : [];
+                    for (const url of urls) {
+                        if (typeof url === 'string') {
+                            await deleteFromR2ByUrl(supabase, url).catch(() => {});
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('회원 삭제 시 커뮤니티 이미지 R2 정리 오류:', e);
+        }
+
         await Promise.all([
+            supabase.from('community_posts').delete().eq('author_id', d.userId),
+            supabase.from('community_comments').delete().eq('author_id', d.userId),
+            supabase.from('community_likes').delete().eq('user_id', d.userId),
             supabase.from('profiles').delete().eq('id', d.userId),
             supabase.from('today_briefs').delete().eq('user_id', d.userId),
             supabase.from('analysis_requests').delete().eq('user_id', d.userId),
