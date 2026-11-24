@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, existsSync, copyFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,3 +20,10 @@ for (const directory of [
 ]) {
   mkdirSync(directory, { recursive: true });
 }
+
+const envFile = path.join(projectRoot, ".env");
+const serverDistDir = path.join(projectRoot, "dist/server");
+if (existsSync(envFile) && existsSync(serverDistDir)) {
+  copyFileSync(envFile, path.join(serverDistDir, ".dev.vars"));
+}
+
