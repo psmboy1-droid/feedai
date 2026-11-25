@@ -10,7 +10,7 @@ export const seoSchema=z.object({
  indexable:z.boolean(),
 });
 export type SeoSettings=z.infer<typeof seoSchema>;
-export const defaultSeo:SeoSettings={title:'피드AI | 나만의 RSS 피드',description:'관심 있는 소식만, 한곳에서. 원하는 RSS 소스를 선택하고 다국어 피드와 AI 시장 분석을 확인하세요.',keywords:'RSS, 피드AI, 피드, 뉴스 수집, AI 시장 분석',siteUrl:'https://hanstaget.com',imageUrl:'/feedai-logo.png',imageAlt:'피드AI',indexable:true};
+export const defaultSeo:SeoSettings={title:'피드AI | 나만의 RSS 피드',description:'관심 있는 소식만, 한곳에서. 원하는 RSS 소스를 선택하고 다국어 피드와 AI 시장 분석을 확인하세요.',keywords:'RSS, 피드AI, 피드, 뉴스 수집, AI 시장 분석',siteUrl:'https://feedaix.com',imageUrl:'/feedai-logo.png',imageAlt:'피드AI',indexable:true};
 export const privateRobots={index:false,follow:false};
 export function seoMetadata(s:SeoSettings){return {metadataBase:new URL(s.siteUrl),title:s.title,description:s.description,keywords:s.keywords.split(',').map(k=>k.trim()).filter(Boolean),alternates:{canonical:s.siteUrl+'/'},robots:{index:s.indexable,follow:s.indexable},icons:{icon:'/feedai-logo.png',shortcut:'/feedai-logo.png',apple:'/feedai-logo.png'},openGraph:{type:'website' as const,locale:'ko_KR',siteName:'피드AI',title:s.title,description:s.description,url:s.siteUrl+'/',images:s.imageUrl?[{url:s.imageUrl,alt:s.imageAlt}]:[{url:'/feedai-logo.png',alt:s.title}]},twitter:{card:s.imageUrl?'summary_large_image' as const:'summary' as const,title:s.title,description:s.description,images:s.imageUrl?[s.imageUrl]:['/feedai-logo.png']}}}
 export function robotsText(s:SeoSettings){return `User-agent: *\nAllow: /\nDisallow: /my-feed\nDisallow: /today\nDisallow: /news\nDisallow: /admin\nDisallow: /api\nDisallow: /login\nDisallow: /signout-with-chatgpt\n`+(s.indexable?`\nSitemap: ${s.siteUrl}/sitemap.xml\n`:'')}
