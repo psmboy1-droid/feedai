@@ -5,6 +5,7 @@ import { isRssAdmin } from '@/lib/rss-admin';
 import { getSupabaseServer } from '@/lib/supabase';
 import { deleteFromR2ByUrl } from '@/lib/r2';
 import { isValidGalleryCategory } from '@/lib/gallery-config';
+import { isSameOrigin } from '@/lib/csrf';
 
 export const dynamic = 'force-dynamic';
 
@@ -115,9 +116,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         }
 
         // 2. CSRF Same-Origin 검증
-        const origin = req.headers.get('origin');
-        const reqOrigin = new URL(req.url).origin;
-        if (origin !== reqOrigin) {
+        if (!isSameOrigin(req)) {
             return reply({ error: '허용되지 않은 요청입니다.' }, 403);
         }
 
@@ -217,9 +216,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
         }
 
         // 2. CSRF Same-Origin 검증
-        const origin = req.headers.get('origin');
-        const reqOrigin = new URL(req.url).origin;
-        if (origin !== reqOrigin) {
+        if (!isSameOrigin(req)) {
             return reply({ error: '허용되지 않은 요청입니다.' }, 403);
         }
 

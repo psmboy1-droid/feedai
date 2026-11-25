@@ -4,6 +4,7 @@ import { getChatGPTUser } from '@/app/chatgpt-auth';
 import { isRssAdmin } from '@/lib/rss-admin';
 import { getSupabaseServer } from '@/lib/supabase';
 import { isValidGalleryCategory } from '@/lib/gallery-config';
+import { isSameOrigin } from '@/lib/csrf';
 
 export const dynamic = 'force-dynamic';
 
@@ -167,9 +168,7 @@ export async function POST(req: NextRequest) {
         }
 
         // 2. CSRF Same-Origin 검증
-        const origin = req.headers.get('origin');
-        const reqOrigin = new URL(req.url).origin;
-        if (origin !== reqOrigin) {
+        if (!isSameOrigin(req)) {
             return reply({ error: '허용되지 않은 요청입니다.' }, 403);
         }
 
