@@ -103,69 +103,78 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
       setUser(supaUser);
 
       try {
-        // 1. profiles 테이블에서 등급(tier), 관리자 여부(is_admin), 만료일(expires_at), 토큰 조회
-        const { data: profileData } = await supabase
-          .from('profiles')
-          .select('tier, is_admin, expires_at, tokens')
-          .eq('id', session.user.id)
-          .maybeSingle();
+        const loadUserData = async () => {
+          // 1. profiles 테이블에서 등급(tier), 관리자 여부(is_admin), 만료일(expires_at), 토큰 조회
+          const { data: profileData } = await supabase
+            .from('profiles')
+            .select('tier, is_admin, expires_at, tokens')
+            .eq('id', session.user.id)
+            .maybeSingle();
 
-        if (profileData) {
-          supaUser.admin = profileData.is_admin === true;
-          setSubscription(buildSubscription(profileData.tier, profileData.expires_at));
-        } else if (process.env.NODE_ENV === 'development') {
-          // 로컬 개발 환경에서 매칭되는 profile 행이 없을 경우 local_seedy(pro) 기준으로 처리
-          setSubscription(buildSubscription('pro', null));
-        }
-
-        // 2. news_accounts 테이블에서 피드 목록(state) 및 표시 이름 조회
-        const { data } = await supabase
-          .from('news_accounts')
-          .select('state, tokens, display_name')
-          .eq('user_id', session.user.id)
-          .maybeSingle();
-
-        let s = { ...empty() };
-
-        if (data) {
-          if (data.display_name) supaUser.name = data.display_name;
-          setUser({ ...supaUser });
-
-          if (data.state) {
-            try {
-              const parsedState = JSON.parse(data.state);
-              s.feeds = parsedState.feeds || [];
-              s.saved = parsedState.saved || [];
-              s.read = parsedState.read || [];
-              s.keywordFilters = parsedState.keywordFilters || parsedState.keyword_filters || defaultKeywordFilters;
-              
-              // profiles 테이블에 데이터가 없더라도 state 내부에 _membership이 있으면 반영
-              if (!profileData && parsedState._membership?.plan) {
-                setSubscription(buildSubscription(parsedState._membership.plan, parsedState._membership.expiresAt));
-              }
-            } catch (e) {
-              console.warn('State 압축 풀기 실패', e);
-            }
+          if (profileData) {
+            supaUser.admin = profileData.is_admin === true;
+            setSubscription(buildSubscription(profileData.tier, profileData.expires_at));
+          } else if (process.env.NODE_ENV === 'development') {
+            // 로컬 개발 환경에서 매칭되는 profile 행이 없을 경우 local_seedy(pro) 기준으로 처리
+            setSubscription(buildSubscription('pro', null));
           }
-          setTokens(data.tokens ?? profileData?.tokens ?? 100);
-        } else {
-          s = { ...empty(), ...guest() };
-          const initialPayload = {
-            user_id: session.user.id,
-            email: session.user.email || '',
-            display_name: supaUser.name,
-            state: JSON.stringify(s),
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          };
-          await supabase.from('news_accounts').insert(initialPayload);
-          setTokens(profileData?.tokens ?? 100);
-        }
 
-        current.current = s;
-        confirmed.current = s;
-        setState(s);
-        setStatus('Supabase 연결됨');
+          // 2. news_accounts 테이블에서 피드 목록(state) 및 표시 이름 조회
+          const { data } = await supabase
+            .from('news_accounts')
+            .select('state, tokens, display_name')
+            .eq('user_id', session.user.id)
+            .maybeSingle();
+
+          let s = { ...empty() };
+
+          if (data) {
+            if (data.display_name) supaUser.name = data.display_name;
+            setUser({ ...supaUser });
+
+            if (data.state) {
+              try {
+                const parsedState = JSON.parse(data.state);
+                s.feeds = parsedState.feeds || [];
+                s.saved = parsedState.saved || [];
+                s.read = parsedState.read || [];
+                s.keywordFilters = parsedState.keywordFilters || parsedState.keyword_filters || defaultKeywordFilters;
+                
+                // profiles 테이블에 데이터가 없더라도 state 내부에 _membership이 있으면 반영
+                if (!profileData && parsedState._membership?.plan) {
+                  setSubscription(buildSubscription(parsedState._membership.plan, parsedState._membership.expiresAt));
+                }
+              } catch (e) {
+                console.warn('State 압축 풀기 실패', e);
+              }
+            }
+            setTokens(data.tokens ?? profileData?.tokens ?? 100);
+          } else {
+            s = { ...empty(), ...guest() };
+            const initialPayload = {
+              user_id: session.user.id,
+              email: session.user.email || '',
+              display_name: supaUser.name,
+              state: JSON.stringify(s),
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            };
+            await supabase.from('news_accounts').insert(initialPayload);
+            setTokens(profileData?.tokens ?? 100);
+          }
+
+          current.current = s;
+          confirmed.current = s;
+          setState(s);
+          setStatus('Supabase 연결됨');
+        };
+
+        // 안전 타임아웃 (8초): DB 조회가 지연되더라도 무한 대기 방지
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('세션 데이터 조회 시간 초과 (8초)')), 8000)
+        );
+
+        await Promise.race([loadUserData(), timeoutPromise]);
       } catch (err) {
         console.error('DB 데이터를 불러오지 못했습니다:', err);
         const fallback = { ...empty(), ...guest() };
@@ -192,10 +201,26 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
       setReady(true);
     }
 
+    // 초기 세션 로딩 안전 타임아웃 (8초): getSession() 자체가 지연되거나 멈출 경우 무한 대기 방지
+    const initTimer = setTimeout(() => {
+      if (live) {
+        console.warn('[news-account] 초기 세션 로딩 안전 타임아웃 (8초)');
+        clearSession();
+      }
+    }, 8000);
+
     supabase.auth.getSession().then(({ data: { session }, error }) => {
+      if (!live) return;
+      clearTimeout(initTimer);
       if (error) { supabase.auth.signOut(); clearSession(); }
       else if (session) { void handleSession(session); }
       else { clearSession(); }
+    }).catch((err) => {
+      if (!live) return;
+      clearTimeout(initTimer);
+      console.warn('[news-account] getSession 실패:', err);
+      clearSession();
+      setReady(true);
     });
 
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
@@ -207,7 +232,11 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
     setHasGuest(!!localStorage.getItem('nd-feeds') || !!localStorage.getItem('nd-saved'));
     try { setArticles((JSON.parse(localStorage.getItem('nd-cache') || '[]') as Article[])); } catch {}
 
-    return () => { live = false; authListener.subscription.unsubscribe(); };
+    return () => {
+      live = false;
+      clearTimeout(initTimer);
+      authListener.subscription.unsubscribe();
+    };
   }, []);
 
   // 🚀 포커스 전환 시 구버전 /api/tokens 대신 Supabase에서 직접 최신 등급과 토큰을 동기화합니다

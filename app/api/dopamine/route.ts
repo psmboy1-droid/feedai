@@ -66,17 +66,7 @@ export async function GET(req: Request) {
   try {
     const supabase = getSupabaseServer();
 
-    // 1) 노출 설정 (display_limit)
-    const { data: settings } = await supabase
-      .from('dopamine_settings')
-      .select('display_limit')
-      .eq('platform', platform)
-      .eq('country', country)
-      .maybeSingle();
-
-    const displayLimit = Math.min(100, Math.max(1, settings?.display_limit ?? 100));
-
-    // 2) 영상 목록 (YouTube인 경우 video_type 일치 조건 추가)
+    // 1) 영상 목록 쿼리 준비 (YouTube인 경우 video_type 일치 조건)
     let videoQuery = supabase
       .from('trending_videos')
       .select('*')
@@ -87,24 +77,51 @@ export async function GET(req: Request) {
       videoQuery = videoQuery.eq('video_type', activeVideoType);
     }
 
-    const { data: videos, error: videoErr } = await videoQuery
-      .order('rank_order', { ascending: true })
-      .order('created_at', { ascending: false })
-      .limit(displayLimit);
+    // 2) 노출 설정, 영상 목록, 활성 광고를 Supabase DB에서 병렬 조회 (외부 API 수집 없음)
+    const [settingsRes, videosRes, adsRes] = await Promise.all([
+      supabase
+        .from('dopamine_settings')
+        .select('display_limit')
+        .eq('platform', platform)
+        .eq('country', country)
+        .maybeSingle(),
+      videoQuery
+        .order('rank_order', { ascending: true })
+        .order('created_at', { ascending: false })
+        .limit(100),
+      supabase
+        .from('dopamine_ads')
+        .select('*')
+        .eq('platform', platform)
+        .eq('is_active', true)
+        .or(`country.eq.${country},country.eq.ALL`)
+        .order('slot_position', { ascending: true }),
+    ]);
 
-    if (videoErr) throw new Error(videoErr.message);
+    if (videosRes.error) throw new Error(videosRes.error.message);
 
-    // 3) 활성 광고 — 플랫폼 일치 & (국가 일치 OR 'ALL')
-    const { data: ads } = await supabase
-      .from('dopamine_ads')
-      .select('*')
-      .eq('platform', platform)
-      .eq('is_active', true)
-      .or(`country.eq.${country},country.eq.ALL`)
-      .order('slot_position', { ascending: true });
+    const displayLimit = Math.min(100, Math.max(1, settingsRes.data?.display_limit ?? 100));
+    const rawVideos = videosRes.data ?? [];
 
-    // 4) 광고 병합
-    const videoList: VideoItem[] = (videos ?? []).map((v, i) => ({
+    // DB에 데이터가 없으면 외부 수집을 돌리지 않고 빈 배열을 즉시 반환
+    if (rawVideos.length === 0) {
+      return Response.json(
+        {
+          items: [],
+          total: 0,
+          displayLimit,
+          videoType: activeVideoType,
+          checkedAt: Date.now(),
+        },
+        { headers: { 'Cache-Control': 'no-store' } }
+      );
+    }
+
+    const videos = rawVideos.slice(0, displayLimit);
+    const ads = adsRes.data ?? [];
+
+    // 3) 광고 병합
+    const videoList: VideoItem[] = videos.map((v, i) => ({
       ...v,
       isAd: false as const,
       displayRank: i + 1,
@@ -112,7 +129,7 @@ export async function GET(req: Request) {
 
     const merged: FeedItem[] = [...videoList];
 
-    for (const ad of (ads ?? [])) {
+    for (const ad of ads) {
       const idx = Math.max(0, ad.slot_position - 1); // 0-based
       const insertAt = Math.min(idx, merged.length);  // 범위 초과 시 맨 뒤
       merged.splice(insertAt, 0, {
@@ -124,13 +141,13 @@ export async function GET(req: Request) {
 
     // displayRank 재계산 & displayLimit 절단
     const items: FeedItem[] = merged
-      .slice(0, displayLimit + (ads?.length ?? 0)) // 광고 포함 길이 허용
+      .slice(0, displayLimit + ads.length) // 광고 포함 길이 허용
       .map((item, i) => ({ ...item, displayRank: i + 1 }));
 
     return Response.json(
       {
         items,
-        total:        videos?.length ?? 0,
+        total:        videos.length,
         displayLimit,
         videoType:    activeVideoType,
         checkedAt:    Date.now(),

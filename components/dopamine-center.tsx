@@ -432,10 +432,10 @@ export default function DopamineCenter({ platform = 'youtube' }: { platform?: Pl
     setPlaying('');
   }, [country, platform, videoType]);
 
-  // 데이터 로드
+  // 데이터 로드 (AbortController 적용으로 탭/국가 빠른 전환 시 이전 요청 즉각 취소)
   useEffect(() => {
     mounted.current = true;
-    let live = true;
+    const controller = new AbortController();
     setData(null);
     setError('');
     setLoading(true);
@@ -445,19 +445,30 @@ export default function DopamineCenter({ platform = 'youtube' }: { platform?: Pl
         const url = platform === 'youtube'
           ? `/api/dopamine?platform=youtube&country=${country}&videoType=${videoType}`
           : `/api/dopamine?platform=${platform}&country=${country}`;
-        const r = await fetch(url, { cache: 'no-store' });
+        const r = await fetch(url, { cache: 'no-store', signal: controller.signal });
         const d = await r.json() as ApiResponse;
         if (!r.ok) throw new Error(d.error || '콘텐츠를 불러오지 못했습니다.');
-        if (live) { setData(d); setError(''); }
+        if (!controller.signal.aborted) {
+          setData(d);
+          setError('');
+        }
       } catch (e) {
-        if (live) setError(e instanceof Error ? e.message : '콘텐츠 로드 실패');
+        if (!controller.signal.aborted) {
+          if (e instanceof Error && e.name === 'AbortError') return;
+          setError(e instanceof Error ? e.message : '콘텐츠 로드 실패');
+        }
       } finally {
-        if (live) setLoading(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
       }
     }
 
     void load();
-    return () => { live = false; mounted.current = false; };
+    return () => {
+      controller.abort();
+      mounted.current = false;
+    };
   }, [country, platform, videoType, retry]);
 
   // 무한 스크롤 — IntersectionObserver
@@ -556,7 +567,7 @@ export default function DopamineCenter({ platform = 'youtube' }: { platform?: Pl
         {loading && !data && (
           <div className="dopamine-empty" role="status">
             <RefreshCw className="spin" />
-            <h2>새로운 콘텐츠를 가져오는 중…</h2>
+            <h2>콘텐츠를 불러오는 중…</h2>
           </div>
         )}
 
@@ -569,11 +580,11 @@ export default function DopamineCenter({ platform = 'youtube' }: { platform?: Pl
         )}
 
         {/* 비어있음 */}
-        {!loading && !error && data && allItems.length === 0 && (
+        {!loading && !error && allItems.length === 0 && (
           <section className="dopamine-empty">
             <PlatformIcon size={38} />
             <h2>{countryLabel} {platformLabel}</h2>
-            <p>아직 수집된 콘텐츠가 없습니다.</p>
+            <p>아직 등록되거나 수집된 콘텐츠가 없습니다.</p>
             {account.user?.admin && <a href="/admin/dopamine">관리자에서 수집 시작하기</a>}
           </section>
         )}
