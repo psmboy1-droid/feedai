@@ -21,14 +21,16 @@ export interface TrendingVideo {
     video_type:    VideoType;
 }
 
-/** RapidAPI 키 셔플 목록 가져오기 */
+/** RapidAPI 키 셔플 목록 가져오기 (RAPIDAPI_KEY 및 RAPIDAPI_KEY_1~4 포함, 중복 제거) */
 function getShuffledRapidApiKeys(): string[] {
-    const keys = [
+    const rawKeys = [
+        process.env.RAPIDAPI_KEY,
         process.env.RAPIDAPI_KEY_1,
         process.env.RAPIDAPI_KEY_2,
         process.env.RAPIDAPI_KEY_3,
         process.env.RAPIDAPI_KEY_4,
     ].filter(Boolean) as string[];
+    const keys = Array.from(new Set(rawKeys));
     if (!keys.length) throw new Error('RapidAPI 키가 설정되지 않았습니다.');
 
     const shuffled = [...keys];
@@ -63,6 +65,7 @@ async function fetchRapidApiWithRetry(
                 },
             });
             if ([401, 403, 429].includes(res.status)) {
+                console.warn(`[RapidAPI] 키 상태 (${res.status}), 다음 키로 자동 로테이션합니다.`);
                 lastRes = res;
                 continue; // 키 한도/권한 문제 시 다음 키로 재시도
             }
@@ -128,88 +131,106 @@ async function collectYoutube(keyword: string, country: Country, limit: number):
 
     const seenIds = new Set<string>();
     const shortsVideos: TrendingVideo[] = [];
+    let shortsPageToken: string | undefined;
+    let shortsPage = 0;
 
-    // 1) 쇼츠 수집 (videoDuration = 'short', q = `${keyword} #shorts`)
-    const shortsSearchUrl = new URL('https://www.googleapis.com/youtube/v3/search');
-    shortsSearchUrl.searchParams.set('part', 'snippet');
-    shortsSearchUrl.searchParams.set('type', 'video');
-    shortsSearchUrl.searchParams.set('q', `${keyword} #shorts`);
-    shortsSearchUrl.searchParams.set('videoDuration', 'short');
-    shortsSearchUrl.searchParams.set('regionCode', country);
-    shortsSearchUrl.searchParams.set('maxResults', String(Math.min(50, Math.max(limit * 2, 30))));
-    shortsSearchUrl.searchParams.set('key', apiKey);
+    // 1) 쇼츠 수집 (videoDuration = 'short', q = `${keyword} #shorts`, 최대 5페이지 또는 limit 달성 시까지)
+    while (shortsVideos.length < limit && shortsPage < 5) {
+        const remaining = limit - shortsVideos.length;
+        const maxResults = Math.min(50, Math.max(remaining * 2, 30));
+        const shortsSearchUrl = new URL('https://www.googleapis.com/youtube/v3/search');
+        shortsSearchUrl.searchParams.set('part', 'snippet');
+        shortsSearchUrl.searchParams.set('type', 'video');
+        shortsSearchUrl.searchParams.set('q', `${keyword} #shorts`);
+        shortsSearchUrl.searchParams.set('videoDuration', 'short');
+        shortsSearchUrl.searchParams.set('regionCode', country);
+        shortsSearchUrl.searchParams.set('maxResults', String(maxResults));
+        shortsSearchUrl.searchParams.set('key', apiKey);
+        if (shortsPageToken) shortsSearchUrl.searchParams.set('pageToken', shortsPageToken);
 
-    const shortsRes = await fetch(shortsSearchUrl.toString(), { signal: AbortSignal.timeout(15000) });
-    if (!shortsRes.ok) throw new Error(`YouTube Shorts Search API 오류: ${shortsRes.status}`);
-    const shortsData = await shortsRes.json() as any;
-    const shortsItems: any[] = shortsData.items || [];
+        const shortsRes = await fetch(shortsSearchUrl.toString(), { signal: AbortSignal.timeout(15000) });
+        if (!shortsRes.ok) {
+            if (shortsPage === 0) {
+                throw new Error(`YouTube Shorts Search API 오류: ${shortsRes.status}`);
+            }
+            break;
+        }
+        const shortsData = await shortsRes.json() as any;
+        const shortsItems: any[] = shortsData.items || [];
 
-    const candidateShorts: { videoId: string; item: any }[] = [];
-    for (const item of shortsItems) {
-        const videoId = item.id?.videoId;
-        if (!videoId) continue;
-        const compositeId = `${videoId}_${country}`;
-        if (seenIds.has(compositeId)) continue;
-        candidateShorts.push({ videoId, item });
-    }
+        const candidateShorts: { videoId: string; item: any }[] = [];
+        for (const item of shortsItems) {
+            const videoId = item.id?.videoId;
+            if (!videoId) continue;
+            const compositeId = `${videoId}_${country}`;
+            if (seenIds.has(compositeId)) continue;
+            candidateShorts.push({ videoId, item });
+        }
 
-    // candidateShorts의 실제 재생시간 조회 (youtube/v3/videos?part=contentDetails)
-    const durationMap = new Map<string, number>();
-    if (candidateShorts.length > 0) {
-        const vUrl = new URL('https://www.googleapis.com/youtube/v3/videos');
-        vUrl.searchParams.set('part', 'contentDetails');
-        vUrl.searchParams.set('id', candidateShorts.map(c => c.videoId).join(','));
-        vUrl.searchParams.set('key', apiKey);
+        // candidateShorts의 실제 재생시간 조회 (youtube/v3/videos?part=contentDetails)
+        const durationMap = new Map<string, number>();
+        if (candidateShorts.length > 0) {
+            const vUrl = new URL('https://www.googleapis.com/youtube/v3/videos');
+            vUrl.searchParams.set('part', 'contentDetails');
+            vUrl.searchParams.set('id', candidateShorts.map(c => c.videoId).join(','));
+            vUrl.searchParams.set('key', apiKey);
 
-        const vRes = await fetch(vUrl.toString(), { signal: AbortSignal.timeout(15000) });
-        if (vRes.ok) {
-            const vData = await vRes.json() as any;
-            for (const v of (vData.items || [])) {
-                if (v.id && v.contentDetails?.duration) {
-                    durationMap.set(v.id, parseIsoDurationToSeconds(v.contentDetails.duration));
+            const vRes = await fetch(vUrl.toString(), { signal: AbortSignal.timeout(15000) });
+            if (vRes.ok) {
+                const vData = await vRes.json() as any;
+                for (const v of (vData.items || [])) {
+                    if (v.id && v.contentDetails?.duration) {
+                        durationMap.set(v.id, parseIsoDurationToSeconds(v.contentDetails.duration));
+                    }
                 }
             }
         }
-    }
 
-    // 재생시간 1 ~ 65초 우선 채택, 모자라면 66 ~ 180초 중 제목에 #shorts 또는 쇼츠 포함 시 보충
-    const tier1: { videoId: string; item: any }[] = [];
-    const tier2: { videoId: string; item: any }[] = [];
+        // 재생시간 1 ~ 65초 우선 채택, 모자라면 66 ~ 180초 중 제목에 #shorts 또는 쇼츠 포함 시 보충
+        const tier1: { videoId: string; item: any }[] = [];
+        const tier2: { videoId: string; item: any }[] = [];
 
-    for (const cand of candidateShorts) {
-        const sec = durationMap.get(cand.videoId) ?? 0;
-        const title = cand.item.snippet?.title || '';
-        if (sec >= 1 && sec <= 65) {
-            tier1.push(cand);
-        } else if (sec >= 66 && sec <= 180) {
-            if (/#shorts/i.test(title) || /쇼츠/i.test(title)) {
-                tier2.push(cand);
+        for (const cand of candidateShorts) {
+            const sec = durationMap.get(cand.videoId) ?? 0;
+            const title = cand.item.snippet?.title || '';
+            if (sec >= 1 && sec <= 65) {
+                tier1.push(cand);
+            } else if (sec >= 66 && sec <= 180) {
+                if (/#shorts/i.test(title) || /쇼츠/i.test(title)) {
+                    tier2.push(cand);
+                }
             }
         }
-    }
 
-    const selectedShorts = [...tier1, ...tier2].slice(0, limit);
-    for (let i = 0; i < selectedShorts.length; i++) {
-        const cand = selectedShorts[i];
-        const compositeId = `${cand.videoId}_${country}`;
-        seenIds.add(compositeId);
-        shortsVideos.push({
-            video_id:      compositeId,
-            title:         safeTitle(cand.item.snippet?.title),
-            thumbnail_url: `https://i.ytimg.com/vi/${cand.videoId}/maxresdefault.jpg`,
-            platform:      'youtube',
-            country,
-            play_url:      `https://www.youtube.com/embed/${cand.videoId}`,
-            rank_order:    i + 1,
-            video_type:    'shorts',
-        });
+        const selectedShorts = [...tier1, ...tier2];
+        for (const cand of selectedShorts) {
+            if (shortsVideos.length >= limit) break;
+            const compositeId = `${cand.videoId}_${country}`;
+            if (seenIds.has(compositeId)) continue;
+            seenIds.add(compositeId);
+            shortsVideos.push({
+                video_id:      compositeId,
+                title:         safeTitle(cand.item.snippet?.title),
+                thumbnail_url: `https://i.ytimg.com/vi/${cand.videoId}/maxresdefault.jpg`,
+                platform:      'youtube',
+                country,
+                play_url:      `https://www.youtube.com/embed/${cand.videoId}`,
+                rank_order:    shortsVideos.length + 1,
+                video_type:    'shorts',
+            });
+        }
+
+        shortsPageToken = shortsData.nextPageToken;
+        shortsPage++;
+        if (!shortsPageToken || shortsVideos.length >= limit) break;
     }
 
     // 2) 일반 영상 수집 (videoDuration = 'medium' 4~20분, q = keyword)
     const regularVideos: TrendingVideo[] = [];
     let pageToken: string | undefined;
+    let regularPage = 0;
 
-    while (regularVideos.length < limit) {
+    while (regularVideos.length < limit && regularPage < 5) {
         const remaining = limit - regularVideos.length;
         const maxResults = Math.min(50, remaining);
         const url = new URL('https://www.googleapis.com/youtube/v3/search');
@@ -223,7 +244,12 @@ async function collectYoutube(keyword: string, country: Country, limit: number):
         if (pageToken) url.searchParams.set('pageToken', pageToken);
 
         const res = await fetch(url.toString(), { signal: AbortSignal.timeout(15000) });
-        if (!res.ok) throw new Error(`YouTube Search API 오류: ${res.status}`);
+        if (!res.ok) {
+            if (regularPage === 0) {
+                throw new Error(`YouTube Search API 오류: ${res.status}`);
+            }
+            break;
+        }
         const data = await res.json() as any;
 
         const items: any[] = data.items || [];
@@ -248,6 +274,7 @@ async function collectYoutube(keyword: string, country: Country, limit: number):
         }
 
         pageToken = data.nextPageToken;
+        regularPage++;
         if (!pageToken || regularVideos.length >= limit) break;
     }
 
@@ -263,7 +290,7 @@ async function collectTiktok(keyword: string, country: Country, limit: number): 
     let cursor = 0;
     let page = 0;
 
-    while (videos.length < limit && page < 4) {
+    while (videos.length < limit && page < 5) {
         const params = new URLSearchParams({
             keywords:     keyword,
             region:       country.toLowerCase(),
@@ -304,12 +331,14 @@ async function collectTiktok(keyword: string, country: Country, limit: number): 
             const rawId = item.video_id || item.aweme_id || item.id || '';
             if (!rawId) continue;
 
-            const videoUrl = item.play || item.video_url || item.video?.playAddr || '';
-            if (!videoUrl) continue;
-
             const compositeId = `${rawId}_${country}`;
             if (seenIds.has(compositeId)) continue;
             seenIds.add(compositeId);
+
+            const authorHandle = item.author?.unique_id || item.author?.uniqueId || '';
+            const permanentUrl = authorHandle
+                ? `https://www.tiktok.com/@${authorHandle}/video/${rawId}`
+                : `https://www.tiktok.com/video/${rawId}`;
 
             const thumb = item.cover || item.origin_cover || '';
             videos.push({
@@ -318,7 +347,7 @@ async function collectTiktok(keyword: string, country: Country, limit: number): 
                 thumbnail_url: thumb,
                 platform:      'tiktok',
                 country,
-                play_url:      videoUrl,
+                play_url:      permanentUrl,
                 rank_order:    videos.length + 1,
                 video_type:    'shorts',
             });
@@ -393,7 +422,7 @@ async function collectInstagram(keyword: string, country: Country, limit: number
     let nextMaxId: string | undefined;
     let page = 0;
 
-    while (page < 5 && videos.length < limit) {
+    while (page < 7 && videos.length < limit) {
         const body: Record<string, string> = { name: keyword, tab: 'top' };
         if (nextMaxId) body['next_max_id'] = nextMaxId;
 

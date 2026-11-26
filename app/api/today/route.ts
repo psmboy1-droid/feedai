@@ -16,6 +16,7 @@ import {
     summaryApi,
     completedBrief
 } from '../../../lib/today-brief-service';
+import { isSameOrigin } from '../../../lib/csrf';
 
 export const dynamic = 'force-dynamic';
 const reply = (data: unknown, status = 200) =>
@@ -96,7 +97,7 @@ export async function POST(req: Request) {
     const user = await getChatGPTUser();
     if (!user) return reply({ error: '로그인이 필요합니다.' }, 401);
     if (await isDeletedMember(user.userId)) return reply({ error: '삭제된 회원 계정입니다.' }, 403);
-    if (req.headers.get('origin') !== new URL(req.url).origin) return reply({ error: '허용되지 않은 요청입니다.' }, 403);
+    if (!isSameOrigin(req)) return reply({ error: '허용되지 않은 요청입니다.' }, 403);
 
     let chargedId = '',
         requestId = '';

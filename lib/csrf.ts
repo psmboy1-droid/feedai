@@ -1,10 +1,8 @@
-import type { NextRequest } from 'next/server';
-
 /**
  * Same-Origin CSRF 검증 유틸
  * - Cloudflare / Nginx 리버스 프록시 SSL 오프로딩 및 호스트 헤더 환경 대응
  */
-export function isSameOrigin(req: NextRequest): boolean {
+export function isSameOrigin(req: Request): boolean {
     const originHeader = req.headers.get('origin');
     const refererHeader = req.headers.get('referer');
 

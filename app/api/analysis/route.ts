@@ -14,6 +14,7 @@ import {
     saveTicket,
     jobTicket
 } from '../../../lib/analysis-tokens';
+import { isSameOrigin } from '../../../lib/csrf';
 
 export const dynamic = 'force-dynamic';
 const reply = (body: unknown, status = 200) =>
@@ -134,7 +135,7 @@ export async function POST(req: Request) {
         if (!user) return reply({ error: '로그인이 필요합니다.' }, 401);
         if (await isDeletedMember(user.userId)) return reply({ error: '삭제된 회원 계정입니다.' }, 403);
         userId = user.userId;
-        if (req.headers.get('origin') !== new URL(req.url).origin)
+        if (!isSameOrigin(req))
             return reply({ error: '허용되지 않은 요청입니다.' }, 403);
         if (!(await hasApiKey()))
             return reply({ error: 'AI API가 연결되지 않아 분석을 생성할 수 없습니다.' }, 503);

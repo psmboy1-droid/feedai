@@ -1,6 +1,7 @@
 import { isRssAdmin } from '../../../../lib/rss-admin';
 import { readAiPrompts, defaultPrompts } from '../../../../lib/ai-prompts';
 import { getSupabaseServer } from '../../../../lib/supabase';
+import { isSameOrigin } from '../../../../lib/csrf';
 
 export const dynamic = 'force-dynamic';
 const reply = (data: unknown, status = 200) =>
@@ -20,7 +21,7 @@ export async function GET() {
 
 export async function PUT(req: Request) {
     if (!(await isRssAdmin())) return reply({ error: '관리자만 접근할 수 있습니다.' }, 403);
-    if (req.headers.get('origin') !== new URL(req.url).origin)
+    if (!isSameOrigin(req))
         return reply({ error: '허용되지 않은 요청입니다.' }, 403);
     try {
         const raw = await req.text();

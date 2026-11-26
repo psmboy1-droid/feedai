@@ -3,6 +3,7 @@ import { getChatGPTUser } from '../../../chatgpt-auth';
 import { z } from 'zod';
 import { createClient } from '@supabase/supabase-js';
 import { deleteFromR2ByUrl } from '../../../../lib/r2';
+import { isSameOrigin } from '../../../../lib/csrf';
 
 export const dynamic = 'force-dynamic';
 
@@ -89,7 +90,7 @@ async function body(req: Request) {
 // 💡 수정된 부분: 데이터가 없으면 Insert, 있으면 Update (이름도 변경 반영)
 export async function PUT(req: Request) {
     if (!await isRssAdmin()) return reply({ error: '관리자만 접근할 수 있습니다.' }, 403);
-    if (req.headers.get('origin') !== new URL(req.url).origin) return reply({ error: '허용되지 않은 요청입니다.' }, 403);
+    if (!isSameOrigin(req)) return reply({ error: '허용되지 않은 요청입니다.' }, 403);
 
     try {
         const parsed = await body(req);
@@ -144,7 +145,7 @@ export async function PUT(req: Request) {
 
 export async function DELETE(req: Request) {
     if (!await isRssAdmin()) return reply({ error: '관리자만 접근할 수 있습니다.' }, 403);
-    if (req.headers.get('origin') !== new URL(req.url).origin) return reply({ error: '허용되지 않은 요청입니다.' }, 403);
+    if (!isSameOrigin(req)) return reply({ error: '허용되지 않은 요청입니다.' }, 403);
 
     try {
         const parsed = await body(req);

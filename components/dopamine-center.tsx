@@ -136,7 +136,7 @@ function YoutubeCard({ item, playing, onPlay, isWide }: {
   );
 }
 
-// ─── 카드: TikTok / Instagram ─────────────────────────────────────────────
+// ─── 카드: Instagram ──────────────────────────────────────────────────────
 function SocialCard({
   item,
   platform,
@@ -223,6 +223,78 @@ function SocialCard({
         </button>
       </div>
       {decodedTitle && <p className="dopamine-card-title">{decodedTitle}</p>}
+    </article>
+  );
+}
+
+// ─── 카드: TikTok ─────────────────────────────────────────────────────────
+function TiktokCard({
+  item,
+  playing,
+  onPlay,
+}: {
+  item: VideoItem;
+  playing: string;
+  onPlay: (id: string) => void;
+}) {
+  const rawId = item.video_id.replace(/_[A-Z]{2}$/, '');
+  const decodedTitle = decodeHtmlEntities(item.title);
+  const isPlaying = playing === item.video_id;
+  const [thumbError, setThumbError] = useState(false);
+
+  // 영구 외부 틱톡 영상 페이지 링크
+  const pageUrl = item.play_url?.includes('tiktok.com/@')
+    ? item.play_url
+    : `https://www.tiktok.com/video/${rawId}`;
+
+  return (
+    <article className="dopamine-card dopamine-card-social">
+      <div className="dopamine-media">
+        {isPlaying ? (
+          <iframe
+            title={decodedTitle}
+            src={`https://www.tiktok.com/player/v1/${rawId}?autoplay=1`}
+            allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+            allowFullScreen
+            referrerPolicy="strict-origin-when-cross-origin"
+          />
+        ) : (
+          <button
+            className="dopamine-play"
+            onClick={() => onPlay(item.video_id)}
+            aria-label={`${decodedTitle} 재생`}
+          >
+            {item.thumbnail_url && !thumbError ? (
+              <img
+                src={item.thumbnail_url}
+                alt={decodedTitle}
+                loading="lazy"
+                decoding="async"
+                referrerPolicy="no-referrer"
+                onError={() => setThumbError(true)}
+              />
+            ) : (
+              <span className="dopamine-thumbnail-missing">썸네일 로드 불가 · 클릭해 재생</span>
+            )}
+            <span className="dopamine-play-symbol"><Play size={32} fill="currentColor" /></span>
+            <span className="dopamine-kind">TikTok</span>
+          </button>
+        )}
+      </div>
+      {decodedTitle && (
+        <p className="dopamine-card-title">
+          <a
+            href={pageUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="TikTok에서 원본 보기"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+          >
+            <span>{decodedTitle}</span>
+            <span style={{ fontSize: '11px', opacity: 0.7, flexShrink: 0 }}>↗</span>
+          </a>
+        </p>
+      )}
     </article>
   );
 }
@@ -522,6 +594,16 @@ export default function DopamineCenter({ platform = 'youtube' }: { platform?: Pl
                       playing={playing}
                       onPlay={setPlaying}
                       isWide={isWide}
+                    />
+                  );
+                }
+                if (item.platform === 'tiktok') {
+                  return (
+                    <TiktokCard
+                      key={item.id}
+                      item={item}
+                      playing={playing}
+                      onPlay={setPlaying}
                     />
                   );
                 }

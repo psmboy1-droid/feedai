@@ -8,6 +8,7 @@ import { isRssAdmin } from '../../../../lib/rss-admin';
 import { getSupabaseServer } from '../../../../lib/supabase';
 import { collectTrending, collectAll, type Platform, type Country } from '../../../../lib/dopamine-collector';
 import { getR2StorageStats, deleteFromR2ByUrl, extractR2KeyFromUrl } from '../../../../lib/r2';
+import { isSameOrigin } from '../../../../lib/csrf';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,7 +26,7 @@ async function payload(req: Request) {
 
 async function allowed(req: Request) {
     if (!await isRssAdmin()) return reply({ error: '관리자만 접근할 수 있습니다.' }, 403);
-    if (req.method !== 'GET' && req.headers.get('origin') !== new URL(req.url).origin)
+    if (req.method !== 'GET' && !isSameOrigin(req))
         return reply({ error: '허용되지 않은 요청입니다.' }, 403);
     return null;
 }
