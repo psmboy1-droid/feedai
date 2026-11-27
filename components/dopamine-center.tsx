@@ -318,6 +318,32 @@ function InstagramCard({
   );
 }
 
+// ─── 틱톡 oEmbed 실패 카드 동시 실행 제한 큐 (최대 2개) ──────────────────
+const MAX_TIKTOK_OEMBED_CONCURRENCY = 2;
+let activeTiktokOembedCount = 0;
+const tiktokOembedWaiters: Array<() => void> = [];
+
+function enqueueTiktokThumbRefresh(task: () => Promise<void>): void {
+  const run = async () => {
+    activeTiktokOembedCount++;
+    try {
+      await task();
+    } finally {
+      activeTiktokOembedCount--;
+      const next = tiktokOembedWaiters.shift();
+      if (next) next();
+    }
+  };
+
+  if (activeTiktokOembedCount < MAX_TIKTOK_OEMBED_CONCURRENCY) {
+    void run();
+  } else {
+    tiktokOembedWaiters.push(() => {
+      void run();
+    });
+  }
+}
+
 // ─── 카드: TikTok ─────────────────────────────────────────────────────────
 function TiktokCard({
   item,
@@ -331,7 +357,72 @@ function TiktokCard({
   const rawId = item.video_id.replace(/_[A-Z]{2}$/, '');
   const decodedTitle = decodeHtmlEntities(item.title);
   const isPlaying = playing === item.video_id;
+  const [currentThumbUrl, setCurrentThumbUrl] = useState(item.thumbnail_url || '');
   const [thumbError, setThumbError] = useState(false);
+  const [refreshingThumb, setRefreshingThumb] = useState(false);
+  const oembedTriedRef = useRef(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    setCurrentThumbUrl(item.thumbnail_url || '');
+    setThumbError(false);
+    setRefreshingThumb(false);
+    oembedTriedRef.current = false;
+  }, [item.video_id, item.thumbnail_url]);
+
+  const requestOembedThumb = useCallback(() => {
+    if (oembedTriedRef.current) {
+      setThumbError(true);
+      return;
+    }
+    oembedTriedRef.current = true;
+    setRefreshingThumb(true);
+    const targetVideoId = item.video_id;
+    const previousUrl = item.thumbnail_url || '';
+
+    enqueueTiktokThumbRefresh(async () => {
+      if (!mountedRef.current) return;
+      try {
+        const res = await fetch('/api/dopamine/tiktok/thumbnail', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ video_id: targetVideoId }),
+        });
+        const text = await res.text();
+        let data: { thumbnail_url?: string } = {};
+        try {
+          data = text ? (JSON.parse(text) as { thumbnail_url?: string }) : {};
+        } catch {
+          data = {};
+        }
+
+        if (!mountedRef.current) return;
+        if (res.ok && data.thumbnail_url && data.thumbnail_url !== previousUrl) {
+          setCurrentThumbUrl(data.thumbnail_url);
+          setThumbError(false);
+        } else {
+          setThumbError(true);
+        }
+      } catch {
+        if (mountedRef.current) setThumbError(true);
+      } finally {
+        if (mountedRef.current) setRefreshingThumb(false);
+      }
+    });
+  }, [item.video_id, item.thumbnail_url]);
+
+  useEffect(() => {
+    if (!currentThumbUrl && !oembedTriedRef.current) {
+      requestOembedThumb();
+    }
+  }, [currentThumbUrl, requestOembedThumb]);
 
   // 영구 외부 틱톡 영상 페이지 링크
   const pageUrl = item.play_url?.includes('tiktok.com/@')
@@ -355,17 +446,19 @@ function TiktokCard({
             onClick={() => onPlay(item.video_id)}
             aria-label={`${decodedTitle} 재생`}
           >
-            {item.thumbnail_url && !thumbError ? (
+            {currentThumbUrl && !thumbError && !refreshingThumb ? (
               <img
-                src={item.thumbnail_url}
+                src={currentThumbUrl}
                 alt={decodedTitle}
                 loading="lazy"
                 decoding="async"
                 referrerPolicy="no-referrer"
-                onError={() => setThumbError(true)}
+                onError={requestOembedThumb}
               />
             ) : (
-              <span className="dopamine-thumbnail-missing">썸네일 로드 불가 · 클릭해 재생</span>
+              <span className="dopamine-thumbnail-missing">
+                {refreshingThumb ? '썸네일 불러오는 중…' : '썸네일 로드 불가 · 클릭해 재생'}
+              </span>
             )}
             <span className="dopamine-play-symbol"><Play size={32} fill="currentColor" /></span>
             <span className="dopamine-kind">TikTok</span>
