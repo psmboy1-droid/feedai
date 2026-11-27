@@ -79,28 +79,35 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
       } catch {}
     }
     void load();
-    window.addEventListener('focus', load);
-    return () => { live = false; window.removeEventListener('focus', load); };
+    return () => { live = false; };
   }, []);
 
   const [subscription, setSubscription] = useState<Membership & { limits: typeof PLANS[keyof typeof PLANS] }>({ plan: 'free', expiresAt: '', creditMonth: '', limits: PLANS.free });
   const [tokens, setTokens] = useState<number | null>(null);
   const [state, setState] = useState<State>(empty), [articles, setArticles] = useState<Article[]>([]), [ready, setReady] = useState(false), [user, setUser] = useState<User | null>(null), [status, setStatus] = useState('계정 확인 중'), [error, setError] = useState(''), [hasGuest, setHasGuest] = useState(false);
-  const confirmed = useRef(state); const current = useRef(state), identity = useRef<User | null>(null), revision = useRef(0), pending = useRef<State | null>(null), saving = useRef(false), blocked = useRef(false);
+  const confirmed = useRef(state); const current = useRef(state), identity = useRef<User | null>(null), loadingUserId = useRef<string | null>(null), revision = useRef(0), pending = useRef<State | null>(null), saving = useRef(false), blocked = useRef(false);
   
   useEffect(() => {
     let live = true;
 
     // 🚀 Supabase DB(news_accounts + profiles)에서 유저 데이터와 PRO 등급을 함께 꺼내옵니다
     async function handleSession(session: any) {
+      const nextId: string | undefined = session?.user?.id;
+      if (!nextId) return;
+      if (identity.current?.id === nextId || loadingUserId.current === nextId) {
+        syncAuthCookies(session);
+        return;
+      }
+
+      loadingUserId.current = nextId;
       syncAuthCookies(session);
       const supaUser: User = {
-        id: session.user.id,
+        id: nextId,
         name: session.user.user_metadata?.name || session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || '사용자',
         admin: false
       };
       identity.current = supaUser;
-      setUser(supaUser);
+      setUser(prev => (prev && prev.id === supaUser.id && prev.name === supaUser.name && prev.admin === supaUser.admin) ? prev : supaUser);
 
       try {
         const loadUserData = async () => {
@@ -130,7 +137,7 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
 
           if (data) {
             if (data.display_name) supaUser.name = data.display_name;
-            setUser({ ...supaUser });
+            setUser(prev => (prev && prev.id === supaUser.id && prev.name === supaUser.name && prev.admin === supaUser.admin) ? prev : { ...supaUser });
 
             if (data.state) {
               try {
@@ -150,6 +157,7 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
             }
             setTokens(data.tokens ?? profileData?.tokens ?? 100);
           } else {
+            setUser(prev => (prev && prev.id === supaUser.id && prev.name === supaUser.name && prev.admin === supaUser.admin) ? prev : { ...supaUser });
             s = { ...empty(), ...guest() };
             const initialPayload = {
               user_id: session.user.id,
@@ -184,11 +192,15 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
         setTokens(100);
         setStatus('로컬 모드 (DB 연결 실패)');
       } finally {
+        if (loadingUserId.current === nextId) {
+          loadingUserId.current = null;
+        }
         setReady(true);
       }
     }
 
     function clearSession() {
+      loadingUserId.current = null;
       clearAuthCookies();
       identity.current = null;
       setUser(null);
@@ -225,8 +237,22 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
 
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
       if (!live) return;
-      if (event === 'SIGNED_IN' && session) { void handleSession(session); }
-      else if (event === 'SIGNED_OUT') { clearSession(); }
+      if (event === 'TOKEN_REFRESHED') {
+        if (session) syncAuthCookies(session);
+        return;
+      }
+      if (event === 'SIGNED_IN' && session) {
+        // 이미 같은 user.id로 로그인되어 있으면 토큰 쿠키만 갱신하고 DB/상태 재조회 차단
+        if (identity.current?.id === session.user?.id || loadingUserId.current === session.user?.id) {
+          syncAuthCookies(session);
+          return;
+        }
+        void handleSession(session);
+      } else if (event === 'SIGNED_OUT') {
+        if (identity.current !== null || loadingUserId.current !== null) {
+          clearSession();
+        }
+      }
     });
 
     setHasGuest(!!localStorage.getItem('nd-feeds') || !!localStorage.getItem('nd-saved'));
@@ -239,32 +265,42 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // 🚀 포커스 전환 시 구버전 /api/tokens 대신 Supabase에서 직접 최신 등급과 토큰을 동기화합니다
+  // 🚀 명시적 크레딧 변경 이벤트(feedai-tokens-changed) 발생 시에만 최신 등급과 토큰을 동기화 (focus 재조회 제거)
   useEffect(() => {
-    if (!ready || !user) return;
+    const userId = user?.id;
+    if (!ready || !userId) return;
     let live = true;
     async function refresh(event?: Event) {
       if (event instanceof CustomEvent && typeof event.detail === 'number') { setTokens(event.detail); return; }
       try {
         const [{ data: profileData }, { data: accountData }] = await Promise.all([
-          supabase.from('profiles').select('tier, is_admin, expires_at, tokens').eq('id', user!.id).maybeSingle(),
-          supabase.from('news_accounts').select('tokens, display_name').eq('user_id', user!.id).maybeSingle()
+          supabase.from('profiles').select('tier, is_admin, expires_at, tokens').eq('id', userId).maybeSingle(),
+          supabase.from('news_accounts').select('tokens, display_name').eq('user_id', userId).maybeSingle()
         ]);
         if (!live) return;
         if (profileData) {
-          setSubscription(buildSubscription(profileData.tier, profileData.expires_at));
-          setUser(old => old ? { ...old, admin: profileData.is_admin === true } : old);
+          const nextSub = buildSubscription(profileData.tier, profileData.expires_at);
+          setSubscription(prev => (prev.plan === nextSub.plan && prev.expiresAt === nextSub.expiresAt) ? prev : nextSub);
+          setUser(old => {
+            if (!old) return old;
+            const nextAdmin = profileData.is_admin === true;
+            return old.admin === nextAdmin ? old : { ...old, admin: nextAdmin };
+          });
         }
         if (accountData) {
-          setTokens(accountData.tokens ?? profileData?.tokens ?? 100);
-          if (accountData.display_name) setUser(old => old ? { ...old, name: accountData.display_name } : old);
+          const nextTokens = accountData.tokens ?? profileData?.tokens ?? 100;
+          setTokens(prev => prev === nextTokens ? prev : nextTokens);
+          if (accountData.display_name) {
+            setUser(old => {
+              if (!old) return old;
+              return old.name === accountData.display_name ? old : { ...old, name: accountData.display_name };
+            });
+          }
         }
       } catch {}
     }
-    void refresh();
     window.addEventListener('feedai-tokens-changed', refresh);
-    window.addEventListener('focus', refresh);
-    return () => { live = false; window.removeEventListener('feedai-tokens-changed', refresh); window.removeEventListener('focus', refresh); };
+    return () => { live = false; window.removeEventListener('feedai-tokens-changed', refresh); };
   }, [ready, user?.id]);
   
   // 🚀 유저가 피드를 추가/삭제할 때 DB로 실시간 꽂아 넣는 배관(Update)
@@ -329,7 +365,8 @@ export function NewsAccountProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  useEffect(() => { if (ready && !user) try { localStorage.setItem('nd-cache', JSON.stringify(articles)); } catch {} }, [articles, ready, user]);
+  const userId = user?.id;
+  useEffect(() => { if (ready && !userId) try { localStorage.setItem('nd-cache', JSON.stringify(articles)); } catch {} }, [articles, ready, userId]);
   
   function importGuest() {
     if (!user || !ready) return;

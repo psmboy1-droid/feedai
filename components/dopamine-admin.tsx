@@ -190,15 +190,35 @@ export default function DopamineAdmin() {
     if (!local) return;
     setBusy(true);
     try {
+      const trimmedKeyword = local.keyword.trim();
       const r = await fetch('/api/admin/dopamine', {
         method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ platform, country, search_keyword: local.keyword, display_limit: local.limit }),
+        body:    JSON.stringify({ platform, country, search_keyword: trimmedKeyword, display_limit: local.limit }),
       });
       const d = await parseAdminJson<{ message?: string; error?: string }>(r, '저장 실패');
       if (!r.ok) throw new Error(d.error || `저장 실패 (HTTP ${r.status})`);
       flash(d.message || '저장했습니다.');
-      await load();
+      // 전체 GET 재조회 없이 클라이언트 settings 상태만 즉시 갱신
+      setSettingsLocal(prev => ({
+        ...prev,
+        [key]: { keyword: trimmedKeyword, limit: local.limit },
+      }));
+      setData(prev => {
+        if (!prev) return prev;
+        const idx = prev.settings.findIndex(s => s.platform === platform && s.country === country);
+        const updatedSetting: Setting = {
+          ...(idx >= 0 ? prev.settings[idx] : {}),
+          platform,
+          country,
+          search_keyword: trimmedKeyword,
+          display_limit: local.limit,
+        };
+        const nextSettings = idx >= 0
+          ? prev.settings.map((s, i) => (i === idx ? updatedSetting : s))
+          : [...prev.settings, updatedSetting];
+        return { ...prev, settings: nextSettings };
+      });
     } catch (e) { flash(e instanceof Error ? e.message : '저장 실패', true); }
     finally { if (mounted.current) setBusy(false); }
   }

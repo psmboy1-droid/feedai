@@ -537,14 +537,79 @@ export default function DopamineCenter({ platform = 'youtube' }: { platform?: Pl
     setError('');
     setLoading(true);
 
+    async function fetchFeedOnce(): Promise<ApiResponse> {
+      const url = platform === 'youtube'
+        ? `/api/dopamine?platform=youtube&country=${country}&videoType=${videoType}`
+        : `/api/dopamine?platform=${platform}&country=${country}`;
+      const r = await fetch(url, { cache: 'no-store', signal: controller.signal });
+      const text = await r.text();
+
+      const trimmed = text.trimStart();
+      const looksLikeHtml = trimmed.startsWith('<') || /^<!doctype/i.test(trimmed);
+      let parsed: ApiResponse | null = null;
+
+      if (!looksLikeHtml && text) {
+        try {
+          parsed = JSON.parse(text) as ApiResponse;
+        } catch {
+          parsed = null;
+        }
+      }
+
+      if (!r.ok) {
+        const message =
+          parsed?.error ||
+          (r.status >= 500
+            ? `서버 응답이 일시적으로 불안정합니다. (HTTP ${r.status}) 잠시 후 다시 시도해 주세요.`
+            : `콘텐츠를 불러오지 못했습니다. (HTTP ${r.status})`);
+        const err = new Error(message) as Error & { retryable?: boolean };
+        err.retryable = r.status >= 500 && r.status <= 599;
+        throw err;
+      }
+
+      if (!parsed) {
+        const err = new Error('일시적인 서버 응답 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.') as Error & {
+          retryable?: boolean;
+        };
+        err.retryable = true;
+        throw err;
+      }
+
+      return parsed;
+    }
+
     async function load() {
       try {
-        const url = platform === 'youtube'
-          ? `/api/dopamine?platform=youtube&country=${country}&videoType=${videoType}`
-          : `/api/dopamine?platform=${platform}&country=${country}`;
-        const r = await fetch(url, { cache: 'no-store', signal: controller.signal });
-        const d = await r.json() as ApiResponse;
-        if (!r.ok) throw new Error(d.error || '콘텐츠를 불러오지 못했습니다.');
+        let d: ApiResponse;
+        try {
+          d = await fetchFeedOnce();
+        } catch (firstErr) {
+          if (controller.signal.aborted) return;
+          if (firstErr instanceof Error && firstErr.name === 'AbortError') return;
+
+          const isRetryable =
+            (firstErr as { retryable?: boolean })?.retryable === true ||
+            firstErr instanceof TypeError;
+
+          if (!isRetryable) throw firstErr;
+
+          // 일시적인 5xx(Cloudflare 520 포함) 또는 네트워크 오류 시 600ms 후 자동 1회 재시도
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, 600);
+            controller.signal.addEventListener(
+              'abort',
+              () => {
+                clearTimeout(timer);
+                reject(new DOMException('Aborted', 'AbortError'));
+              },
+              { once: true }
+            );
+          });
+
+          if (controller.signal.aborted) return;
+          d = await fetchFeedOnce();
+        }
+
         if (!controller.signal.aborted) {
           setData(d);
           setError('');
@@ -552,7 +617,11 @@ export default function DopamineCenter({ platform = 'youtube' }: { platform?: Pl
       } catch (e) {
         if (!controller.signal.aborted) {
           if (e instanceof Error && e.name === 'AbortError') return;
-          setError(e instanceof Error ? e.message : '콘텐츠 로드 실패');
+          setError(
+            e instanceof Error
+              ? e.message
+              : '콘텐츠를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.'
+          );
         }
       } finally {
         if (!controller.signal.aborted) {

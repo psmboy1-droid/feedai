@@ -80,11 +80,12 @@ export default function Page({
   const running = useRef(false);
   const latestFeeds = useRef(feeds);
   latestFeeds.current = feeds;
+  const userId = user?.id;
   useEffect(() => {
-    if (ready && user && !personal && window.location.pathname === "/") {
+    if (ready && userId && !personal && window.location.pathname === "/") {
       navigateWorkspace("/my-feed" + window.location.search);
     }
-  }, [ready, user, personal]);
+  }, [ready, userId, personal]);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     setView(params.get("view") === "saved" ? "saved" : "news");

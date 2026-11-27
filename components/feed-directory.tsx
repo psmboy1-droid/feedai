@@ -109,10 +109,7 @@ export default function FeedDirectory({
 
     useEffect(() => {
         void checkTelegramStatus();
-        const onFocus = () => void checkTelegramStatus();
-        window.addEventListener('focus', onFocus);
         return () => {
-            window.removeEventListener('focus', onFocus);
             if (tgPollRef.current) clearInterval(tgPollRef.current);
         };
     }, [checkTelegramStatus]);

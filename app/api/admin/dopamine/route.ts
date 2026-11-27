@@ -103,24 +103,28 @@ export async function GET(req: Request) {
 
     const supabase = getSupabaseServer();
 
-    const [settingsRes, adsRes, storage] = await Promise.all([
+    // 플랫폼(3) × 국가(3) 카운트 9개와 settings·ads·storage를 모두 병렬 조회
+    const countTargets = PLATFORMS.flatMap(p =>
+        COUNTRIES.map(c => ({ platform: p, country: c, key: `${p}_${c}` }))
+    );
+
+    const [settingsRes, adsRes, storage, countEntries] = await Promise.all([
         supabase.from('dopamine_settings').select('*').order('platform').order('country'),
         supabase.from('dopamine_ads').select('*').order('platform').order('slot_position'),
         getR2StorageStats(supabase),
+        Promise.all(
+            countTargets.map(async ({ platform, country, key }) => {
+                const { count } = await supabase
+                    .from('trending_videos')
+                    .select('id', { count: 'exact', head: true })
+                    .eq('platform', platform)
+                    .eq('country', country);
+                return [key, count ?? 0] as const;
+            })
+        ),
     ]);
 
-    // 플랫폼 × 국가별 현재 저장된 영상 수
-    const videoCountMap: Record<string, number> = {};
-    for (const p of PLATFORMS) {
-        for (const c of COUNTRIES) {
-            const { count } = await supabase
-                .from('trending_videos')
-                .select('id', { count: 'exact', head: true })
-                .eq('platform', p)
-                .eq('country', c);
-            videoCountMap[`${p}_${c}`] = count ?? 0;
-        }
-    }
+    const videoCountMap = Object.fromEntries(countEntries);
 
     return reply({
         settings:    settingsRes.data  ?? [],
