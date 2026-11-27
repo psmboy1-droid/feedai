@@ -136,64 +136,107 @@ function YoutubeCard({ item, playing, onPlay, isWide }: {
   );
 }
 
+// ─── Instagram pk → shortcode 변환 ──────────────────────────────────────
+// Instagram shortcode = pk를 Base64url(A-Z a-z 0-9 _ -) 로 인코딩한 값
+// BigInt 없이 문자열 나눗셈으로 처리 (ES2020 이전 타겟 대응)
+const INSTAGRAM_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+/** 10진 숫자 문자열을 64로 나눈 몫과 나머지를 반환 */
+function divmod64(digits: string): [string, number] {
+  let rem = 0;
+  let quotient = '';
+  for (let i = 0; i < digits.length; i++) {
+    const cur = rem * 10 + parseInt(digits[i], 10);
+    const q = Math.floor(cur / 64);
+    rem = cur % 64;
+    if (quotient || q) quotient += q;
+  }
+  return [quotient || '0', rem];
+}
+
+function instagramPkToShortcode(pk: string): string {
+  if (!/^\d+$/.test(pk) || pk === '0') return '';
+  let digits = pk;
+  let code = '';
+  while (digits !== '0' && digits !== '') {
+    const [q, r] = divmod64(digits);
+    code = INSTAGRAM_CHARS[r] + code;
+    digits = q;
+  }
+  return code;
+}
+
+/** video_id (형식: "{rawPk}_{COUNTRY}") 에서 인스타그램 embed URL 생성 */
+function instagramEmbedUrl(videoId: string): string {
+  const rawPk = videoId.replace(/_[A-Z]{2}$/, '');
+  const shortcode = instagramPkToShortcode(rawPk);
+  if (!shortcode) return '';
+  return `https://www.instagram.com/reel/${shortcode}/embed`;
+}
+
+/** video_id 에서 인스타그램 원본 게시물 URL 생성 */
+function instagramPostUrl(videoId: string): string {
+  const rawPk = videoId.replace(/_[A-Z]{2}$/, '');
+  const shortcode = instagramPkToShortcode(rawPk);
+  if (!shortcode) return 'https://www.instagram.com/';
+  return `https://www.instagram.com/reel/${shortcode}/`;
+}
+
 // ─── 카드: Instagram ──────────────────────────────────────────────────────
-function SocialCard({
+function InstagramCard({
   item,
-  platform,
   playing,
   onPlay,
 }: {
   item: VideoItem;
-  platform: Platform;
   playing: string;
   onPlay: (id: string) => void;
 }) {
-  const [fallbackLink, setFallbackLink] = useState(false);
   const [thumbError, setThumbError] = useState(false);
-  const label = platform === 'instagram' ? '인스타그램' : 'TikTok';
   const decodedTitle = decodeHtmlEntities(item.title);
   const isPlaying = playing === item.video_id;
 
-  if (isPlaying && !fallbackLink) {
-    return (
-      <article className="dopamine-card dopamine-card-social">
-        <div className="dopamine-media">
-          <video
-            src={item.play_url}
-            poster={item.thumbnail_url || undefined}
-            preload="metadata"
-            controls
-            autoPlay
-            playsInline
-            onError={() => setFallbackLink(true)}
-          />
-        </div>
-        {decodedTitle && <p className="dopamine-card-title">{decodedTitle}</p>}
-      </article>
-    );
-  }
+  const embedUrl = instagramEmbedUrl(item.video_id);
+  const postUrl  = instagramPostUrl(item.video_id);
 
-  if (fallbackLink) {
+  if (isPlaying) {
     return (
       <article className="dopamine-card dopamine-card-social">
         <div className="dopamine-media">
-          <a href={item.play_url} target="_blank" rel="noopener noreferrer" className="dopamine-external-link">
-            {item.thumbnail_url && !thumbError ? (
-              <img
-                src={item.thumbnail_url}
-                alt={decodedTitle}
-                loading="lazy"
-                referrerPolicy="no-referrer"
-                onError={() => setThumbError(true)}
-              />
-            ) : (
-              <span className="dopamine-thumbnail-missing">썸네일 로드 불가 · 클릭해 재생</span>
-            )}
-            <span className="dopamine-play-symbol"><Play size={32} fill="currentColor" /></span>
-            <span className="dopamine-kind">{label} ↗</span>
-          </a>
+          {embedUrl ? (
+            <iframe
+              title={decodedTitle || '인스타그램 릴스'}
+              src={embedUrl}
+              allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+              allowFullScreen
+              referrerPolicy="strict-origin-when-cross-origin"
+            />
+          ) : (
+            /* shortcode 변환 실패 시 원본 링크 버튼으로 대체 */
+            <a
+              href={postUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="dopamine-external-link"
+            >
+              <span className="dopamine-thumbnail-missing">인스타그램에서 보기 ↗</span>
+            </a>
+          )}
         </div>
-        {decodedTitle && <p className="dopamine-card-title">{decodedTitle}</p>}
+        {decodedTitle && (
+          <p className="dopamine-card-title">
+            <a
+              href={postUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="인스타그램 원본 보기"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+            >
+              <span>{decodedTitle}</span>
+              <span style={{ fontSize: '11px', opacity: 0.7, flexShrink: 0 }}>↗</span>
+            </a>
+          </p>
+        )}
       </article>
     );
   }
@@ -219,10 +262,23 @@ function SocialCard({
             <span className="dopamine-thumbnail-missing">썸네일 로드 불가 · 클릭해 재생</span>
           )}
           <span className="dopamine-play-symbol"><Play size={32} fill="currentColor" /></span>
-          <span className="dopamine-kind">{label}</span>
+          <span className="dopamine-kind">인스타그램</span>
         </button>
       </div>
-      {decodedTitle && <p className="dopamine-card-title">{decodedTitle}</p>}
+      {decodedTitle && (
+        <p className="dopamine-card-title">
+          <a
+            href={postUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="인스타그램 원본 보기"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+          >
+            <span>{decodedTitle}</span>
+            <span style={{ fontSize: '11px', opacity: 0.7, flexShrink: 0 }}>↗</span>
+          </a>
+        </p>
+      )}
     </article>
   );
 }
@@ -618,15 +674,18 @@ export default function DopamineCenter({ platform = 'youtube' }: { platform?: Pl
                     />
                   );
                 }
-                return (
-                  <SocialCard
-                    key={item.id}
-                    item={item}
-                    platform={item.platform}
-                    playing={playing}
-                    onPlay={setPlaying}
-                  />
-                );
+                if (item.platform === 'instagram') {
+                  return (
+                    <InstagramCard
+                      key={item.id}
+                      item={item}
+                      playing={playing}
+                      onPlay={setPlaying}
+                    />
+                  );
+                }
+                // 그 외 플랫폼 (추후 확장용 — 현재 미사용)
+                return null;
               })}
             </div>
 
