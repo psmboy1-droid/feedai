@@ -166,20 +166,28 @@ function instagramPkToShortcode(pk: string): string {
   return code;
 }
 
-/** video_id (형식: "{rawPk}_{COUNTRY}") 에서 인스타그램 embed URL 생성 */
-function instagramEmbedUrl(videoId: string): string {
-  const rawPk = videoId.replace(/_[A-Z]{2}$/, '');
-  const shortcode = instagramPkToShortcode(rawPk);
-  if (!shortcode) return '';
-  return `https://www.instagram.com/reel/${shortcode}/embed`;
-}
-
 /** video_id 에서 인스타그램 원본 게시물 URL 생성 */
 function instagramPostUrl(videoId: string): string {
-  const rawPk = videoId.replace(/_[A-Z]{2}$/, '');
+  const rawPk = videoId.replace(/_[A-Z]{2}$/, '').split('_')[0];
   const shortcode = instagramPkToShortcode(rawPk);
   if (!shortcode) return 'https://www.instagram.com/';
   return `https://www.instagram.com/reel/${shortcode}/`;
+}
+
+/** DB에 저장된 URL이 우리 R2 전용 경로(dopamine/instagram/*.mp4)인지 판별 */
+function isInstagramR2VideoUrl(url: string): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
+    const host = parsed.hostname.toLowerCase();
+    if (host.includes('instagram.com') || host.includes('cdninstagram.com') || host.includes('fbcdn.net')) {
+      return false;
+    }
+    return parsed.pathname.includes('/dopamine/instagram/') && /\.mp4$/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
 }
 
 // ─── 카드: Instagram ──────────────────────────────────────────────────────
@@ -193,77 +201,74 @@ function InstagramCard({
   onPlay: (id: string) => void;
 }) {
   const [thumbError, setThumbError] = useState(false);
+  const [videoError, setVideoError] = useState(false);
   const decodedTitle = decodeHtmlEntities(item.title);
   const isPlaying = playing === item.video_id;
 
-  const embedUrl = instagramEmbedUrl(item.video_id);
-  const postUrl  = instagramPostUrl(item.video_id);
-
-  if (isPlaying) {
-    return (
-      <article className="dopamine-card dopamine-card-social">
-        <div className="dopamine-media">
-          {embedUrl ? (
-            <iframe
-              title={decodedTitle || '인스타그램 릴스'}
-              src={embedUrl}
-              allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-              allowFullScreen
-              referrerPolicy="strict-origin-when-cross-origin"
-            />
-          ) : (
-            /* shortcode 변환 실패 시 원본 링크 버튼으로 대체 */
-            <a
-              href={postUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="dopamine-external-link"
-            >
-              <span className="dopamine-thumbnail-missing">인스타그램에서 보기 ↗</span>
-            </a>
-          )}
-        </div>
-        {decodedTitle && (
-          <p className="dopamine-card-title">
-            <a
-              href={postUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="인스타그램 원본 보기"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}
-            >
-              <span>{decodedTitle}</span>
-              <span style={{ fontSize: '11px', opacity: 0.7, flexShrink: 0 }}>↗</span>
-            </a>
-          </p>
-        )}
-      </article>
-    );
-  }
+  const postUrl = instagramPostUrl(item.video_id);
+  const hasR2Video = isInstagramR2VideoUrl(item.play_url) && !videoError;
 
   return (
     <article className="dopamine-card dopamine-card-social">
       <div className="dopamine-media">
-        <button
-          className="dopamine-play"
-          onClick={() => onPlay(item.video_id)}
-          aria-label={`${decodedTitle} 재생`}
-        >
-          {item.thumbnail_url && !thumbError ? (
-            <img
-              src={item.thumbnail_url}
-              alt={decodedTitle}
-              loading="lazy"
-              decoding="async"
-              referrerPolicy="no-referrer"
-              onError={() => setThumbError(true)}
-            />
-          ) : (
-            <span className="dopamine-thumbnail-missing">썸네일 로드 불가 · 클릭해 재생</span>
-          )}
-          <span className="dopamine-play-symbol"><Play size={32} fill="currentColor" /></span>
-          <span className="dopamine-kind">인스타그램</span>
-        </button>
+        {!hasR2Video ? (
+          /* R2 영상 주소가 없는 항목은 인스타그램 원본 릴스 링크를 새 창으로 열기 */
+          <a
+            href={postUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="dopamine-play dopamine-external-link"
+            aria-label={`${decodedTitle || '인스타그램 릴스'} 인스타그램에서 보기`}
+          >
+            {item.thumbnail_url && !thumbError ? (
+              <img
+                src={item.thumbnail_url}
+                alt={decodedTitle}
+                loading="lazy"
+                decoding="async"
+                referrerPolicy="no-referrer"
+                onError={() => setThumbError(true)}
+              />
+            ) : (
+              <span className="dopamine-thumbnail-missing">인스타그램에서 보기 ↗</span>
+            )}
+            <span className="dopamine-play-symbol"><ArrowUpRight size={28} /></span>
+            <span className="dopamine-kind">인스타그램 ↗</span>
+          </a>
+        ) : isPlaying ? (
+          <video
+            key={item.play_url}
+            src={item.play_url}
+            poster={item.thumbnail_url && !thumbError ? item.thumbnail_url : undefined}
+            controls
+            autoPlay
+            playsInline
+            preload="auto"
+            onError={() => setVideoError(true)}
+          />
+        ) : (
+          <button
+            type="button"
+            className="dopamine-play"
+            onClick={() => onPlay(item.video_id)}
+            aria-label={`${decodedTitle || '인스타그램 릴스'} 재생`}
+          >
+            {item.thumbnail_url && !thumbError ? (
+              <img
+                src={item.thumbnail_url}
+                alt={decodedTitle}
+                loading="lazy"
+                decoding="async"
+                referrerPolicy="no-referrer"
+                onError={() => setThumbError(true)}
+              />
+            ) : (
+              <span className="dopamine-thumbnail-missing">썸네일 로드 불가 · 클릭해 재생</span>
+            )}
+            <span className="dopamine-play-symbol"><Play size={32} fill="currentColor" /></span>
+            <span className="dopamine-kind">인스타그램</span>
+          </button>
+        )}
       </div>
       {decodedTitle && (
         <p className="dopamine-card-title">

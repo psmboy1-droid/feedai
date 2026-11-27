@@ -27,18 +27,31 @@ export async function GET(req: Request) {
         : 'tiktok';
 
     try {
+        // Cloudflare 100초 타임아웃 방지를 위한 전체 요청 기준 75초 소프트 데드라인
+        const deadlineAt = Date.now() + 75_000;
+
         // 3. 'all'인 경우 전체 플랫폼 × 국가 일괄 수집
         if (platform === 'all') {
-            const results = await collectAll();
+            const results = await collectAll({ deadlineAt });
             return NextResponse.json({ ok: true, platform: 'all', results });
         }
 
         // 4. 특정 플랫폼인 경우: RapidAPI 429(Rate Limit) 방지를 위해 국가별 순차(for...of) 실행
-        const results: { platform: Platform; country: Country; count: number; error?: string }[] = [];
+        const results: { platform: Platform; country: Country; count: number; error?: string; partial?: boolean; skipped?: number }[] = [];
 
         for (const country of COUNTRIES) {
+            if (platform === 'instagram' && Date.now() >= deadlineAt) {
+                results.push({
+                    platform,
+                    country,
+                    count: 0,
+                    partial: true,
+                    error: '전체 실행 시간 제한(75초) 도달로 이번 국가는 기존 데이터를 유지합니다.',
+                });
+                continue;
+            }
             try {
-                const res = await collectTrending(platform, country);
+                const res = await collectTrending(platform, country, { deadlineAt });
                 results.push({ platform, country, ...res });
             } catch (err: any) {
                 results.push({
@@ -47,6 +60,22 @@ export async function GET(req: Request) {
                     count: 0,
                     error: err instanceof Error ? err.message : '수집 중 오류 발생',
                 });
+            }
+        }
+
+        if (platform === 'instagram') {
+            const totalCount = results.reduce((sum, r) => sum + r.count, 0);
+            const hasPartial = results.some(r => r.partial);
+            if (totalCount === 0 && !hasPartial && results.some(r => r.error)) {
+                return NextResponse.json(
+                    {
+                        ok: false,
+                        platform,
+                        results,
+                        error: results.find(r => r.error)?.error || '인스타그램 수집 실패',
+                    },
+                    { status: 502 }
+                );
             }
         }
 

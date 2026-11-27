@@ -183,15 +183,19 @@ export async function POST(req: Request) {
         // 수집 실행
         if (body.action === 'collect') {
             const d = collectSchema.parse(body);
+            const deadlineAt = Date.now() + 75_000;
 
             if (d.platform && d.country) {
-                const result = await collectTrending(d.platform, d.country);
+                const result = await collectTrending(d.platform, d.country, { deadlineAt });
                 if (result.error && result.count === 0)
                     return reply({ error: result.error }, 502);
-                return reply({ message: `수집 완료: ${result.count}건`, count: result.count });
+                const message = result.partial
+                    ? `수집 완료: ${result.count}건 (시간 제한으로 완료 항목만 안전 반영)`
+                    : `수집 완료: ${result.count}건`;
+                return reply({ message, count: result.count, partial: result.partial ?? false });
             }
 
-            const results = await collectAll();
+            const results = await collectAll({ deadlineAt });
             const totalCount = results.reduce((s, r) => s + r.count, 0);
             return reply({ message: `전체 수집 완료: ${totalCount}건`, results });
         }

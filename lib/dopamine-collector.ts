@@ -5,10 +5,30 @@
  */
 
 import { getSupabaseServer } from './supabase';
+import {
+    DOPAMINE_INSTAGRAM_R2_PREFIX,
+    MAX_R2_BYTES,
+    deleteFromR2ByUrlWithPrefix,
+    getR2StorageStats,
+    isDopamineInstagramR2Url,
+    isDopamineInstagramR2VideoUrl,
+    uploadToR2,
+} from './r2';
 
 export type Platform = 'youtube' | 'tiktok' | 'instagram';
 export type Country  = 'KR' | 'US' | 'JP';
 export type VideoType = 'shorts' | 'video';
+
+export interface CollectOptions {
+    deadlineAt?: number;
+}
+
+export interface CollectResult {
+    count:    number;
+    error?:   string;
+    partial?: boolean;
+    skipped?: number;
+}
 
 export interface TrendingVideo {
     video_id:      string;   // `${원본ID}_${country}`
@@ -416,13 +436,206 @@ function extractReels(
     }
 }
 
-async function collectInstagram(keyword: string, country: Country, limit: number): Promise<TrendingVideo[]> {
+const INSTAGRAM_CONCURRENCY      = 2;
+const INSTAGRAM_VIDEO_TIMEOUT_MS = 15_000;
+const INSTAGRAM_VIDEO_MAX_BYTES  = 15 * 1024 * 1024; // 15 MB
+const INSTAGRAM_THUMB_TIMEOUT_MS = 10_000;
+const INSTAGRAM_THUMB_MAX_BYTES  = 5 * 1024 * 1024;  // 5 MB
+const DEFAULT_SOFT_BUDGET_MS     = 75_000;
+const HARD_DEADLINE_EXTRA_MS     = 8_000;
+
+function sanitizeR2Segment(raw: string): string {
+    return (raw || 'item').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
+}
+
+function isValidMp4Bytes(bytes: Uint8Array, contentType: string): boolean {
+    if (bytes.byteLength < 12) return false;
+    // HTML/JSON/XML 오류 응답 차단
+    if (
+        contentType.startsWith('text/') ||
+        contentType.includes('json') ||
+        contentType.includes('xml') ||
+        contentType.includes('html')
+    ) {
+        return false;
+    }
+    // MP4/MOV ftyp 박스(offset 4) 확인 또는 명시적 video/* 응답 허용
+    const hasFtyp =
+        bytes[4] === 0x66 &&
+        bytes[5] === 0x74 &&
+        bytes[6] === 0x79 &&
+        bytes[7] === 0x70;
+    return hasFtyp || contentType.startsWith('video/');
+}
+
+function detectImageFormat(bytes: Uint8Array, contentType: string): { mime: string; ext: string } | null {
+    if (bytes.byteLength < 12) return null;
+    if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+        return { mime: 'image/jpeg', ext: 'jpg' };
+    }
+    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+        return { mime: 'image/png', ext: 'png' };
+    }
+    if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) {
+        return { mime: 'image/gif', ext: 'gif' };
+    }
+    if (
+        bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+        bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+    ) {
+        return { mime: 'image/webp', ext: 'webp' };
+    }
+    if (contentType === 'image/jpeg' || contentType === 'image/jpg') return { mime: 'image/jpeg', ext: 'jpg' };
+    if (contentType === 'image/png') return { mime: 'image/png', ext: 'png' };
+    if (contentType === 'image/webp') return { mime: 'image/webp', ext: 'webp' };
+    return null;
+}
+
+/** 스트리밍 다운로드 (타임아웃 + 바이트 상한 엄격 적용으로 1GB RAM 서버 보호) */
+async function fetchBinaryWithLimit(
+    url: string,
+    opts: { maxBytes: number; timeoutMs: number }
+): Promise<{ bytes: Uint8Array; contentType: string }> {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') {
+        throw new Error('허용되지 않은 미디어 URL 프로토콜입니다.');
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error('다운로드 시간 초과')), opts.timeoutMs);
+
+    try {
+        const res = await fetch(url, {
+            method: 'GET',
+            signal: controller.signal,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                'Accept': '*/*',
+            },
+        });
+
+        if (!res.ok) {
+            throw new Error(`미디어 다운로드 실패 (${res.status})`);
+        }
+
+        const contentLengthHeader = res.headers.get('content-length');
+        if (contentLengthHeader) {
+            const declared = Number(contentLengthHeader);
+            if (Number.isFinite(declared) && declared > opts.maxBytes) {
+                await res.body?.cancel().catch(() => {});
+                throw new Error(`용량 상한 초과 (${declared} > ${opts.maxBytes})`);
+            }
+        }
+
+        const reader = res.body?.getReader();
+        if (!reader) {
+            throw new Error('빈 미디어 응답입니다.');
+        }
+
+        const chunks: Uint8Array[] = [];
+        let totalBytes = 0;
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!value || value.byteLength === 0) continue;
+
+            totalBytes += value.byteLength;
+            if (totalBytes > opts.maxBytes) {
+                await reader.cancel().catch(() => {});
+                controller.abort(new Error('용량 상한 초과'));
+                throw new Error(`용량 상한 초과 (> ${opts.maxBytes} bytes)`);
+            }
+            chunks.push(value);
+        }
+
+        if (totalBytes === 0) {
+            throw new Error('빈 미디어 파일입니다.');
+        }
+
+        const merged = new Uint8Array(totalBytes);
+        let offset = 0;
+        for (const chunk of chunks) {
+            merged.set(chunk, offset);
+            offset += chunk.byteLength;
+        }
+
+        const contentType = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+        return { bytes: merged, contentType };
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+async function recordInstagramR2File(
+    supabase: ReturnType<typeof getSupabaseServer>,
+    opts: { key: string; publicUrl: string; contentType: string; fileSize: number }
+): Promise<void> {
+    try {
+        const { error } = await supabase.from('r2_media_files').insert({
+            object_key:   opts.key,
+            public_url:   opts.publicUrl,
+            category:     'dopamine_instagram',
+            content_type: opts.contentType,
+            file_size:    opts.fileSize,
+        });
+        if (error) {
+            console.warn('[Instagram R2] r2_media_files 기록 경고:', error.message);
+        }
+    } catch (err) {
+        console.warn('[Instagram R2] r2_media_files 기록 예외:', err);
+    }
+}
+
+async function uploadInstagramThumbnailToR2(
+    supabase: ReturnType<typeof getSupabaseServer>,
+    thumbUrl: string,
+    country: Country,
+    safeId: string,
+    hardDeadlineAt: number
+): Promise<string | null> {
+    if (!thumbUrl) return null;
+    const remainingMs = hardDeadlineAt - Date.now();
+    if (remainingMs < 2_000) return null;
+
+    const { bytes, contentType } = await fetchBinaryWithLimit(thumbUrl, {
+        maxBytes:  INSTAGRAM_THUMB_MAX_BYTES,
+        timeoutMs: Math.min(INSTAGRAM_THUMB_TIMEOUT_MS, remainingMs),
+    });
+    const imgInfo = detectImageFormat(bytes, contentType);
+    if (!imgInfo) return null;
+
+    const key = `${DOPAMINE_INSTAGRAM_R2_PREFIX}${country.toLowerCase()}/${safeId}-thumb-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${imgInfo.ext}`;
+    const publicUrl = await uploadToR2({
+        key,
+        body:        bytes,
+        contentType: imgInfo.mime,
+    });
+    await recordInstagramR2File(supabase, {
+        key,
+        publicUrl,
+        contentType: imgInfo.mime,
+        fileSize:    bytes.byteLength,
+    });
+    return publicUrl;
+}
+
+async function collectInstagram(
+    keyword: string,
+    country: Country,
+    limit: number,
+    softDeadlineAt?: number
+): Promise<TrendingVideo[]> {
     const videos: TrendingVideo[] = [];
     const seenIds = new Set<string>();
     let nextMaxId: string | undefined;
     let page = 0;
 
     while (page < 7 && videos.length < limit) {
+        if (softDeadlineAt && page > 0 && videos.length > 0 && Date.now() >= softDeadlineAt - 15_000) {
+            break;
+        }
+
         const body: Record<string, string> = { name: keyword, tab: 'top' };
         if (nextMaxId) body['next_max_id'] = nextMaxId;
 
@@ -456,13 +669,297 @@ async function collectInstagram(keyword: string, country: Country, limit: number
     return videos.map((v, i) => ({ ...v, rank_order: i + 1 }));
 }
 
+async function collectAndSyncInstagram(
+    supabase: ReturnType<typeof getSupabaseServer>,
+    keyword: string,
+    country: Country,
+    displayLimit: number,
+    softDeadlineAt: number
+): Promise<CollectResult> {
+    const hardDeadlineAt = softDeadlineAt + HARD_DEADLINE_EXTRA_MS;
+
+    if (Date.now() >= softDeadlineAt) {
+        return {
+            count: 0,
+            partial: true,
+            error: '전체 실행 시간 제한(75초) 도달로 이번 국가는 기존 데이터를 유지합니다.',
+        };
+    }
+
+    // 1. R2 저장소 전체 용량 확인
+    const stats = await getR2StorageStats(supabase);
+    if (stats.totalBytes >= MAX_R2_BYTES) {
+        return { count: 0, error: 'R2 저장소 한도(9.5GB)에 도달해 업로드를 중단했습니다.' };
+    }
+
+    // 2. 기존 DB 레코드 선조회 (유효 R2 URL 재사용 + 교체 후 구파일 정리용)
+    const { data: existingRows, error: existingErr } = await supabase
+        .from('trending_videos')
+        .select('video_id, play_url, thumbnail_url')
+        .eq('platform', 'instagram')
+        .eq('country', country);
+
+    if (existingErr) {
+        return { count: 0, error: `기존 데이터 조회 실패: ${existingErr.message}` };
+    }
+
+    const existingMap = new Map<string, { play_url: string; thumbnail_url: string }>();
+    for (const row of existingRows ?? []) {
+        existingMap.set(row.video_id, {
+            play_url:      row.play_url || '',
+            thumbnail_url: row.thumbnail_url || '',
+        });
+    }
+
+    // 3. 외부 API로 후보 릴스 목록 수집 (스킵 여유분 포함 최대 100건)
+    const candidateLimit = Math.min(100, displayLimit + Math.min(10, displayLimit));
+    let candidates: TrendingVideo[] = [];
+    try {
+        candidates = await collectInstagram(keyword, country, candidateLimit, softDeadlineAt);
+    } catch (e) {
+        return { count: 0, error: e instanceof Error ? e.message : '인스타그램 수집 실패' };
+    }
+
+    if (candidates.length === 0) {
+        return { count: 0, error: '수집된 인스타그램 영상이 없습니다.' };
+    }
+
+    // 4. 선 업로드 (동시 처리 최대 2개, 개별 15초/15MB 제한, 전체 75초 소프트 데드라인)
+    const processedSlots: Array<TrendingVideo | null> = new Array(candidates.length).fill(null);
+    const newlyUploadedUrls: string[] = [];
+    let nextIdx = 0;
+    let successCount = 0;
+    let skippedCount = 0;
+    let timedOut = false;
+    let stopRequested = false;
+
+    async function worker(): Promise<void> {
+        while (!stopRequested) {
+            if (Date.now() >= softDeadlineAt) {
+                timedOut = true;
+                stopRequested = true;
+                break;
+            }
+            if (successCount >= displayLimit) {
+                stopRequested = true;
+                break;
+            }
+
+            const idx = nextIdx++;
+            if (idx >= candidates.length) break;
+
+            const cand = candidates[idx];
+            const prev = existingMap.get(cand.video_id);
+            const rawId = cand.video_id.replace(/_[A-Z]{2}$/, '');
+            const safeId = sanitizeR2Segment(rawId);
+
+            // (a) 기존 DB에 유효한 R2 .mp4 URL이 이미 있으면 재다운로드 없이 재사용
+            if (prev && isDopamineInstagramR2VideoUrl(prev.play_url)) {
+                let thumbUrl = prev.thumbnail_url;
+                if (!thumbUrl || !isDopamineInstagramR2Url(thumbUrl)) {
+                    if (cand.thumbnail_url && Date.now() < softDeadlineAt) {
+                        try {
+                            const uploadedThumb = await uploadInstagramThumbnailToR2(
+                                supabase,
+                                cand.thumbnail_url,
+                                country,
+                                safeId,
+                                hardDeadlineAt
+                            );
+                            if (uploadedThumb) {
+                                newlyUploadedUrls.push(uploadedThumb);
+                                thumbUrl = uploadedThumb;
+                            }
+                        } catch {
+                            // 썸네일 업로드 실패 시 기존 값 유지
+                        }
+                    }
+                    if (!thumbUrl) thumbUrl = cand.thumbnail_url || '';
+                }
+
+                processedSlots[idx] = {
+                    ...cand,
+                    play_url:      prev.play_url,
+                    thumbnail_url: thumbUrl,
+                };
+                successCount++;
+                continue;
+            }
+
+            // (b) 신규 영상 다운로드(15초, 15MB 상한) → R2 전용 경로(dopamine/instagram/) 업로드
+            const remainingHardMs = hardDeadlineAt - Date.now();
+            if (remainingHardMs < 3_000) {
+                timedOut = true;
+                stopRequested = true;
+                break;
+            }
+
+            try {
+                const { bytes, contentType } = await fetchBinaryWithLimit(cand.play_url, {
+                    maxBytes:  INSTAGRAM_VIDEO_MAX_BYTES,
+                    timeoutMs: Math.min(INSTAGRAM_VIDEO_TIMEOUT_MS, remainingHardMs),
+                });
+
+                if (!isValidMp4Bytes(bytes, contentType)) {
+                    throw new Error('유효한 MP4 영상 데이터가 아닙니다.');
+                }
+
+                const videoKey = `${DOPAMINE_INSTAGRAM_R2_PREFIX}${country.toLowerCase()}/${safeId}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.mp4`;
+                const r2VideoUrl = await uploadToR2({
+                    key:         videoKey,
+                    body:        bytes,
+                    contentType: 'video/mp4',
+                });
+                newlyUploadedUrls.push(r2VideoUrl);
+                await recordInstagramR2File(supabase, {
+                    key:         videoKey,
+                    publicUrl:   r2VideoUrl,
+                    contentType: 'video/mp4',
+                    fileSize:    bytes.byteLength,
+                });
+
+                let r2ThumbUrl = cand.thumbnail_url || '';
+                if (cand.thumbnail_url && Date.now() < hardDeadlineAt - 2_000) {
+                    try {
+                        const uploadedThumb = await uploadInstagramThumbnailToR2(
+                            supabase,
+                            cand.thumbnail_url,
+                            country,
+                            safeId,
+                            hardDeadlineAt
+                        );
+                        if (uploadedThumb) {
+                            newlyUploadedUrls.push(uploadedThumb);
+                            r2ThumbUrl = uploadedThumb;
+                        }
+                    } catch (thumbErr) {
+                        console.warn(`[Instagram R2] 썸네일 업로드 스킵 (${cand.video_id}):`, thumbErr instanceof Error ? thumbErr.message : thumbErr);
+                    }
+                }
+
+                processedSlots[idx] = {
+                    ...cand,
+                    play_url:      r2VideoUrl,
+                    thumbnail_url: r2ThumbUrl,
+                };
+                successCount++;
+            } catch (itemErr) {
+                skippedCount++;
+                console.warn(
+                    `[Instagram R2] 영상 스킵 (${cand.video_id}):`,
+                    itemErr instanceof Error ? itemErr.message : itemErr
+                );
+            }
+        }
+    }
+
+    const workerCount = Math.min(INSTAGRAM_CONCURRENCY, candidates.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+    // 5. 최종 유효 R2 영상 목록 구성 (원본 순위 유지 + 중복 제거 + displayLimit 절단)
+    const uniqueMap = new Map<string, TrendingVideo>();
+    for (const slot of processedSlots) {
+        if (!slot) continue;
+        if (!uniqueMap.has(slot.video_id)) {
+            uniqueMap.set(slot.video_id, slot);
+        }
+        if (uniqueMap.size >= displayLimit) break;
+    }
+
+    const finalVideos: TrendingVideo[] = Array.from(uniqueMap.values()).map((v, idx) => ({
+        ...v,
+        rank_order: idx + 1,
+        video_type: 'shorts',
+    }));
+
+    // R2 확보 항목이 0건이면 기존 DB·기존 R2 파일을 절대 건드리지 않고 롤백 후 에러 반환
+    if (finalVideos.length === 0) {
+        for (const url of newlyUploadedUrls) {
+            await deleteFromR2ByUrlWithPrefix(supabase, url, DOPAMINE_INSTAGRAM_R2_PREFIX).catch(() => {});
+        }
+        return {
+            count:   0,
+            partial: timedOut,
+            skipped: skippedCount,
+            error:   timedOut
+                ? '실행 시간 제한으로 완료된 R2 영상이 없어 기존 데이터를 유지합니다.'
+                : '인스타그램 영상 R2 업로드에 실패하여 기존 데이터를 유지합니다.',
+        };
+    }
+
+    // 6. 후 DB 교체 (선 upsert → 후 미포함 구 레코드 삭제, 무중단 보장)
+    const { error: upsertErr } = await supabase
+        .from('trending_videos')
+        .upsert(finalVideos, { onConflict: 'video_id' });
+
+    if (upsertErr) {
+        // DB 교체 실패 시 이번 배치에 새로 올린 R2 파일만 롤백 정리 (기존 DB/R2 보존)
+        for (const url of newlyUploadedUrls) {
+            await deleteFromR2ByUrlWithPrefix(supabase, url, DOPAMINE_INSTAGRAM_R2_PREFIX).catch(() => {});
+        }
+        return { count: 0, error: `저장 실패: ${upsertErr.message}` };
+    }
+
+    const newVideoIdSet = new Set(finalVideos.map(v => v.video_id));
+    const staleVideoIds = (existingRows ?? [])
+        .map(r => r.video_id)
+        .filter(id => !newVideoIdSet.has(id));
+
+    if (staleVideoIds.length > 0) {
+        const { error: staleDelErr } = await supabase
+            .from('trending_videos')
+            .delete()
+            .eq('platform', 'instagram')
+            .eq('country', country)
+            .in('video_id', staleVideoIds);
+
+        if (staleDelErr) {
+            console.warn('[Instagram R2] 구 DB 레코드 정리 경고:', staleDelErr.message);
+        }
+    }
+
+    // 7. 마지막 구파일 삭제 (새 DB에 없는 항목 중 dopamine/instagram/ 키만 안전 삭제)
+    const newReferencedUrls = new Set<string>();
+    for (const v of finalVideos) {
+        if (v.play_url) newReferencedUrls.add(v.play_url);
+        if (v.thumbnail_url) newReferencedUrls.add(v.thumbnail_url);
+    }
+
+    const cleanupUrls = new Set<string>();
+    for (const row of existingRows ?? []) {
+        if (row.play_url && !newReferencedUrls.has(row.play_url) && isDopamineInstagramR2Url(row.play_url)) {
+            cleanupUrls.add(row.play_url);
+        }
+        if (row.thumbnail_url && !newReferencedUrls.has(row.thumbnail_url) && isDopamineInstagramR2Url(row.thumbnail_url)) {
+            cleanupUrls.add(row.thumbnail_url);
+        }
+    }
+    // 동시성 2 처리로 displayLimit을 초과해 잘린 신규 업로드분도 함께 정리
+    for (const uploadedUrl of newlyUploadedUrls) {
+        if (!newReferencedUrls.has(uploadedUrl) && isDopamineInstagramR2Url(uploadedUrl)) {
+            cleanupUrls.add(uploadedUrl);
+        }
+    }
+
+    for (const oldUrl of cleanupUrls) {
+        await deleteFromR2ByUrlWithPrefix(supabase, oldUrl, DOPAMINE_INSTAGRAM_R2_PREFIX).catch(() => {});
+    }
+
+    return {
+        count:   finalVideos.length,
+        partial: timedOut,
+        skipped: skippedCount,
+    };
+}
+
 // ─────────────────────────────────────────
 // 메인 수집 함수
 // ─────────────────────────────────────────
 export async function collectTrending(
     platform: Platform,
-    country: Country
-): Promise<{ count: number; error?: string }> {
+    country: Country,
+    options?: CollectOptions
+): Promise<CollectResult> {
     const supabase = getSupabaseServer();
 
     // dopamine_settings에서 keyword & limit 읽기
@@ -473,21 +970,26 @@ export async function collectTrending(
         .eq('country', country)
         .maybeSingle();
 
-    const keyword      = settings?.search_keyword || (platform === 'youtube' ? '인기' : platform === 'tiktok' ? '인기' : '인기');
+    const keyword      = settings?.search_keyword || '인기';
     const displayLimit = Math.min(100, Math.max(1, settings?.display_limit ?? 20));
+
+    // 인스타그램은 R2 저장 + 무중단 교체 + 구파일 정리 전용 파이프라인 사용
+    if (platform === 'instagram') {
+        const softDeadlineAt = options?.deadlineAt ?? (Date.now() + DEFAULT_SOFT_BUDGET_MS);
+        return collectAndSyncInstagram(supabase, keyword, country, displayLimit, softDeadlineAt);
+    }
 
     let freshVideos: TrendingVideo[] = [];
     let errorMsg: string | undefined;
 
     try {
-        if (platform === 'youtube')        freshVideos = await collectYoutube(keyword, country, displayLimit);
-        else if (platform === 'tiktok')    freshVideos = await collectTiktok(keyword, country, displayLimit);
-        else if (platform === 'instagram') freshVideos = await collectInstagram(keyword, country, displayLimit);
+        if (platform === 'youtube')     freshVideos = await collectYoutube(keyword, country, displayLimit);
+        else if (platform === 'tiktok') freshVideos = await collectTiktok(keyword, country, displayLimit);
     } catch (e) {
         errorMsg = e instanceof Error ? e.message : '수집 실패';
     }
 
-    // 1건 이상 수집 성공했을 때만 교체
+    // 1건 이상 수집 성공했을 때만 교체 (유튜브·틱톡 기존 로직 유지)
     if (freshVideos.length > 0) {
         // Map을 이용한 최종 video_id 기준 중복 제거 및 video_type별 rank_order 순차 재부여
         const uniqueMap = new Map<string, TrendingVideo>();
@@ -534,13 +1036,27 @@ export async function collectTrending(
 }
 
 /** 전체 플랫폼 × 국가 일괄 수집 */
-export async function collectAll(): Promise<{ platform: Platform; country: Country; count: number; error?: string }[]> {
+export async function collectAll(
+    options?: CollectOptions
+): Promise<Array<{ platform: Platform; country: Country } & CollectResult>> {
     const platforms: Platform[] = ['youtube', 'tiktok', 'instagram'];
     const countries: Country[]  = ['KR', 'US', 'JP'];
-    const results = [];
+    const deadlineAt = options?.deadlineAt ?? (Date.now() + DEFAULT_SOFT_BUDGET_MS);
+    const results: Array<{ platform: Platform; country: Country } & CollectResult> = [];
+
     for (const platform of platforms) {
         for (const country of countries) {
-            const r = await collectTrending(platform, country);
+            if (platform === 'instagram' && Date.now() >= deadlineAt) {
+                results.push({
+                    platform,
+                    country,
+                    count: 0,
+                    partial: true,
+                    error: '전체 실행 시간 제한(75초) 도달로 이번 항목은 기존 데이터를 유지합니다.',
+                });
+                continue;
+            }
+            const r = await collectTrending(platform, country, { deadlineAt });
             results.push({ platform, country, ...r });
         }
     }

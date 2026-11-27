@@ -8,6 +8,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 // ─── 상수 ──────────────────────────────────────────────────────────────────
 export const MAX_R2_BYTES = Math.floor(9.5 * 1024 * 1024 * 1024); // 9.5 GB
+export const DOPAMINE_INSTAGRAM_R2_PREFIX = 'dopamine/instagram/';
 
 function getCleanEndpoint(rawEndpoint: string, bucket: string): string {
     let clean = (rawEndpoint || '').trim().replace(/\/+$/, '');
@@ -67,7 +68,10 @@ export async function uploadToR2(opts: {
     body:        ArrayBuffer | Uint8Array;
     contentType: string;
 }): Promise<string> {
-    const { endpoint, bucket, publicUrl } = getEnv();
+    const { endpoint, bucket, publicUrl, accessKey, secretKey } = getEnv();
+    if (!endpoint || !bucket || !publicUrl || !accessKey || !secretKey) {
+        throw new Error('R2 환경변수가 올바르게 설정되지 않았습니다.');
+    }
     const cleanEndpoint = endpoint.replace(/\/+$/, '');
     const url = `${cleanEndpoint}/${bucket}/${opts.key}`;
 
@@ -125,4 +129,30 @@ export async function deleteFromR2ByUrl(supabase: SupabaseClient, url: string): 
     } catch (err) {
         console.error('[R2] DB 레코드 삭제 오류:', err);
     }
+}
+
+// ─── 도파민 인스타그램 전용 R2 URL / Prefix 안전 검증 및 삭제 ─────────────
+export function isDopamineInstagramR2Url(url: string): boolean {
+    const key = extractR2KeyFromUrl(url);
+    return Boolean(key && key.startsWith(DOPAMINE_INSTAGRAM_R2_PREFIX) && !key.includes('..'));
+}
+
+export function isDopamineInstagramR2VideoUrl(url: string): boolean {
+    if (!isDopamineInstagramR2Url(url)) return false;
+    const pathWithoutQuery = url.split('?')[0].toLowerCase();
+    return pathWithoutQuery.endsWith('.mp4');
+}
+
+export async function deleteFromR2ByUrlWithPrefix(
+    supabase: SupabaseClient,
+    url: string,
+    requiredPrefix = DOPAMINE_INSTAGRAM_R2_PREFIX
+): Promise<boolean> {
+    const key = extractR2KeyFromUrl(url);
+    // 허용된 접두사(dopamine/instagram/) 외의 파일(커뮤니티·갤러리·광고 등)은 절대 삭제 불가
+    if (!key || !key.startsWith(requiredPrefix) || key.includes('..')) {
+        return false;
+    }
+    await deleteFromR2ByUrl(supabase, url);
+    return true;
 }
