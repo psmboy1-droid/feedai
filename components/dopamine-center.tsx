@@ -3,6 +3,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Play, RefreshCw, ArrowUpRight, Camera as Instagram, Music2, Play as Youtube } from 'lucide-react';
 import TopMenu from './top-menu';
 import { useNewsAccount } from './news-account';
+import {
+  extractInstagramRawPk,
+  instagramPkToShortcode,
+  instagramPostUrl,
+  isInstagramOeValid,
+  isLegacyInstagramR2Mp4Url,
+} from '@/lib/instagram-url';
 
 // ─── 타입 ─────────────────────────────────────────────────────────────────
 type Platform = 'youtube' | 'instagram' | 'tiktok';
@@ -136,60 +143,6 @@ function YoutubeCard({ item, playing, onPlay, isWide }: {
   );
 }
 
-// ─── Instagram pk → shortcode 변환 ──────────────────────────────────────
-// Instagram shortcode = pk를 Base64url(A-Z a-z 0-9 _ -) 로 인코딩한 값
-// BigInt 없이 문자열 나눗셈으로 처리 (ES2020 이전 타겟 대응)
-const INSTAGRAM_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-
-/** 10진 숫자 문자열을 64로 나눈 몫과 나머지를 반환 */
-function divmod64(digits: string): [string, number] {
-  let rem = 0;
-  let quotient = '';
-  for (let i = 0; i < digits.length; i++) {
-    const cur = rem * 10 + parseInt(digits[i], 10);
-    const q = Math.floor(cur / 64);
-    rem = cur % 64;
-    if (quotient || q) quotient += q;
-  }
-  return [quotient || '0', rem];
-}
-
-function instagramPkToShortcode(pk: string): string {
-  if (!/^\d+$/.test(pk) || pk === '0') return '';
-  let digits = pk;
-  let code = '';
-  while (digits !== '0' && digits !== '') {
-    const [q, r] = divmod64(digits);
-    code = INSTAGRAM_CHARS[r] + code;
-    digits = q;
-  }
-  return code;
-}
-
-/** video_id 에서 인스타그램 원본 게시물 URL 생성 */
-function instagramPostUrl(videoId: string): string {
-  const rawPk = videoId.replace(/_[A-Z]{2}$/, '').split('_')[0];
-  const shortcode = instagramPkToShortcode(rawPk);
-  if (!shortcode) return 'https://www.instagram.com/';
-  return `https://www.instagram.com/reel/${shortcode}/`;
-}
-
-/** DB에 저장된 URL이 우리 R2 전용 경로(dopamine/instagram/*.mp4)인지 판별 */
-function isInstagramR2VideoUrl(url: string): boolean {
-  if (!url) return false;
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
-    const host = parsed.hostname.toLowerCase();
-    if (host.includes('instagram.com') || host.includes('cdninstagram.com') || host.includes('fbcdn.net')) {
-      return false;
-    }
-    return parsed.pathname.includes('/dopamine/instagram/') && /\.mp4$/i.test(parsed.pathname);
-  } catch {
-    return false;
-  }
-}
-
 // ─── 카드: Instagram ──────────────────────────────────────────────────────
 function InstagramCard({
   item,
@@ -201,18 +154,92 @@ function InstagramCard({
   onPlay: (id: string) => void;
 }) {
   const [thumbError, setThumbError] = useState(false);
-  const [videoError, setVideoError] = useState(false);
+  const [currentPlayUrl, setCurrentPlayUrl] = useState(item.play_url || '');
+  const [refreshing, setRefreshing] = useState(false);
+  const [forceRefreshed, setForceRefreshed] = useState(false);
+  const [failedPermanent, setFailedPermanent] = useState(false);
+
+  useEffect(() => {
+    setCurrentPlayUrl(item.play_url || '');
+    setForceRefreshed(false);
+    setFailedPermanent(false);
+    setRefreshing(false);
+    setThumbError(false);
+  }, [item.video_id, item.play_url]);
+
   const decodedTitle = decodeHtmlEntities(item.title);
   const isPlaying = playing === item.video_id;
 
   const postUrl = instagramPostUrl(item.video_id);
-  const hasR2Video = isInstagramR2VideoUrl(item.play_url) && !videoError;
+  const hasValidShortcode = Boolean(instagramPkToShortcode(extractInstagramRawPk(item.video_id)));
+  const canPlayOrRefresh = (Boolean(currentPlayUrl) || hasValidShortcode) && !failedPermanent;
+
+  async function requestRefresh(force: boolean): Promise<string | null> {
+    setRefreshing(true);
+    try {
+      const res = await fetch('/api/dopamine/instagram/refresh', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ video_id: item.video_id, force }),
+      });
+      const text = await res.text();
+      let payload: { play_url?: string; error?: string } = {};
+      try {
+        payload = text ? (JSON.parse(text) as { play_url?: string; error?: string }) : {};
+      } catch {
+        payload = {};
+      }
+      if (!res.ok || !payload.play_url) {
+        return null;
+      }
+      setCurrentPlayUrl(payload.play_url);
+      return payload.play_url;
+    } catch {
+      return null;
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function handlePlayClick() {
+    if (refreshing) return;
+
+    // 1) oe 만료 5분 이상 남았거나 기존 R2 .mp4 URL이면 즉시 재생
+    if (
+      currentPlayUrl &&
+      (isInstagramOeValid(currentPlayUrl, 300) || isLegacyInstagramR2Mp4Url(currentPlayUrl))
+    ) {
+      onPlay(item.video_id);
+      return;
+    }
+
+    // 2) oe가 만료됐거나 URL이 비어 있으면 온디맨드 갱신 후 즉시 재생
+    const refreshedUrl = await requestRefresh(false);
+    if (refreshedUrl) {
+      onPlay(item.video_id);
+    } else {
+      setFailedPermanent(true);
+    }
+  }
+
+  async function handleVideoError() {
+    if (refreshing) return;
+    // 3) 재생 중 오류 시 카드당 최대 1회 강제 갱신 후 재시도
+    if (!forceRefreshed) {
+      setForceRefreshed(true);
+      const refreshedUrl = await requestRefresh(true);
+      if (refreshedUrl) {
+        return;
+      }
+    }
+    // 4) 1회 강제 갱신 후에도 실패하면 원본 릴스 링크 fallback UI 전환
+    setFailedPermanent(true);
+  }
 
   return (
     <article className="dopamine-card dopamine-card-social">
       <div className="dopamine-media">
-        {!hasR2Video ? (
-          /* R2 영상 주소가 없는 항목은 인스타그램 원본 릴스 링크를 새 창으로 열기 */
+        {!canPlayOrRefresh ? (
           <a
             href={postUrl}
             target="_blank"
@@ -235,23 +262,24 @@ function InstagramCard({
             <span className="dopamine-play-symbol"><ArrowUpRight size={28} /></span>
             <span className="dopamine-kind">인스타그램 ↗</span>
           </a>
-        ) : isPlaying ? (
+        ) : isPlaying && currentPlayUrl && !refreshing ? (
           <video
-            key={item.play_url}
-            src={item.play_url}
+            key={currentPlayUrl}
+            src={currentPlayUrl}
             poster={item.thumbnail_url && !thumbError ? item.thumbnail_url : undefined}
             controls
             autoPlay
             playsInline
             preload="auto"
-            onError={() => setVideoError(true)}
+            onError={() => { void handleVideoError(); }}
           />
         ) : (
           <button
             type="button"
             className="dopamine-play"
-            onClick={() => onPlay(item.video_id)}
-            aria-label={`${decodedTitle || '인스타그램 릴스'} 재생`}
+            disabled={refreshing}
+            onClick={() => { void handlePlayClick(); }}
+            aria-label={refreshing ? '영상 주소를 불러오는 중' : `${decodedTitle || '인스타그램 릴스'} 재생`}
           >
             {item.thumbnail_url && !thumbError ? (
               <img
@@ -265,8 +293,10 @@ function InstagramCard({
             ) : (
               <span className="dopamine-thumbnail-missing">썸네일 로드 불가 · 클릭해 재생</span>
             )}
-            <span className="dopamine-play-symbol"><Play size={32} fill="currentColor" /></span>
-            <span className="dopamine-kind">인스타그램</span>
+            <span className="dopamine-play-symbol">
+              {refreshing ? <RefreshCw size={28} className="spin" /> : <Play size={32} fill="currentColor" />}
+            </span>
+            <span className="dopamine-kind">{refreshing ? '불러오는 중…' : '인스타그램'}</span>
           </button>
         )}
       </div>

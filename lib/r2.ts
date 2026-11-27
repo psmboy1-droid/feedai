@@ -137,12 +137,6 @@ export function isDopamineInstagramR2Url(url: string): boolean {
     return Boolean(key && key.startsWith(DOPAMINE_INSTAGRAM_R2_PREFIX) && !key.includes('..'));
 }
 
-export function isDopamineInstagramR2VideoUrl(url: string): boolean {
-    if (!isDopamineInstagramR2Url(url)) return false;
-    const pathWithoutQuery = url.split('?')[0].toLowerCase();
-    return pathWithoutQuery.endsWith('.mp4');
-}
-
 export async function deleteFromR2ByUrlWithPrefix(
     supabase: SupabaseClient,
     url: string,

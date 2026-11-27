@@ -76,6 +76,23 @@ function isImageUrl(url: string) {
   return /\.(jpe?g|png|webp|gif)(\?|$)/i.test(url);
 }
 
+/** HTML 등 비-JSON 오류 응답에서도 Unexpected token '<' 대신 읽기 쉬운 에러 반환 */
+async function parseAdminJson<T extends { error?: string }>(
+  r: Response,
+  fallbackMsg: string
+): Promise<T> {
+  const text = await r.text();
+  if (!text) {
+    if (!r.ok) throw new Error(`${fallbackMsg} (HTTP ${r.status})`);
+    return {} as T;
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`서버 응답 오류 (HTTP ${r.status}): 올바르지 않은 응답 형식입니다.`);
+  }
+}
+
 // ─── 저장소 사용량 바 ─────────────────────────────────────────────────────
 function StorageBar({ storage }: { storage: StorageStats | undefined }) {
   if (!storage) return null;
@@ -135,8 +152,8 @@ export default function DopamineAdmin() {
   async function load() {
     try {
       const r = await fetch('/api/admin/dopamine', { cache: 'no-store' });
-      const d = await r.json() as AdminData & { error?: string };
-      if (!r.ok) throw new Error(d.error || '불러오기 실패');
+      const d = await parseAdminJson<AdminData & { error?: string }>(r, '불러오기 실패');
+      if (!r.ok) throw new Error(d.error || `불러오기 실패 (HTTP ${r.status})`);
       if (mounted.current) {
         setData(d);
         const map: Record<string, { keyword: string; limit: number }> = {};
@@ -178,8 +195,8 @@ export default function DopamineAdmin() {
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ platform, country, search_keyword: local.keyword, display_limit: local.limit }),
       });
-      const d = await r.json() as { message?: string; error?: string };
-      if (!r.ok) throw new Error(d.error || '저장 실패');
+      const d = await parseAdminJson<{ message?: string; error?: string }>(r, '저장 실패');
+      if (!r.ok) throw new Error(d.error || `저장 실패 (HTTP ${r.status})`);
       flash(d.message || '저장했습니다.');
       await load();
     } catch (e) { flash(e instanceof Error ? e.message : '저장 실패', true); }
@@ -195,8 +212,8 @@ export default function DopamineAdmin() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body:   JSON.stringify({ action: 'collect', platform, country }),
       });
-      const d = await r.json() as { message?: string; error?: string };
-      if (!r.ok) throw new Error(d.error || '수집 실패');
+      const d = await parseAdminJson<{ message?: string; error?: string }>(r, '수집 실패');
+      if (!r.ok) throw new Error(d.error || `수집 실패 (HTTP ${r.status})`);
       flash(d.message || '수집 완료');
       await load();
     } catch (e) { flash(e instanceof Error ? e.message : '수집 실패', true); }
@@ -210,8 +227,8 @@ export default function DopamineAdmin() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body:   JSON.stringify({ action: 'collect' }),
       });
-      const d = await r.json() as { message?: string; error?: string };
-      if (!r.ok) throw new Error(d.error || '전체 수집 실패');
+      const d = await parseAdminJson<{ message?: string; error?: string }>(r, '전체 수집 실패');
+      if (!r.ok) throw new Error(d.error || `전체 수집 실패 (HTTP ${r.status})`);
       flash(d.message || '전체 수집 완료');
       await load();
     } catch (e) { flash(e instanceof Error ? e.message : '전체 수집 실패', true); }
@@ -234,9 +251,9 @@ export default function DopamineAdmin() {
       fd.append('kind', kind === 'thumb' ? 'thumbnail' : 'media');
 
       const r = await fetch('/api/admin/dopamine/upload', { method: 'POST', body: fd });
-      const d = await r.json() as { url?: string; mediaType?: 'image' | 'video'; error?: string };
+      const d = await parseAdminJson<{ url?: string; mediaType?: 'image' | 'video'; error?: string }>(r, '업로드 실패');
 
-      if (!r.ok) throw new Error(d.error || '업로드 실패');
+      if (!r.ok) throw new Error(d.error || `업로드 실패 (HTTP ${r.status})`);
       if (!d.url) throw new Error('URL을 받지 못했습니다.');
 
       if (kind === 'media') {
@@ -272,8 +289,8 @@ export default function DopamineAdmin() {
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({ id: editingAd.id, ...adForm }),
         });
-        const d = await r.json() as { message?: string; error?: string };
-        if (!r.ok) throw new Error(d.error || '수정 실패');
+        const d = await parseAdminJson<{ message?: string; error?: string }>(r, '수정 실패');
+        if (!r.ok) throw new Error(d.error || `수정 실패 (HTTP ${r.status})`);
         flash(d.message || '광고를 수정했습니다.');
       } else {
         const r = await fetch('/api/admin/dopamine', {
@@ -281,8 +298,8 @@ export default function DopamineAdmin() {
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({ action: 'create_ad', ...adForm }),
         });
-        const d = await r.json() as { message?: string; error?: string };
-        if (!r.ok) throw new Error(d.error || '등록 실패');
+        const d = await parseAdminJson<{ message?: string; error?: string }>(r, '등록 실패');
+        if (!r.ok) throw new Error(d.error || `등록 실패 (HTTP ${r.status})`);
         flash(d.message || '광고를 등록했습니다.');
       }
       setEditingAd(null); setAdForm(defaultAd());
@@ -298,8 +315,8 @@ export default function DopamineAdmin() {
         method:  'PATCH', headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ id: ad.id, is_active: !ad.is_active }),
       });
-      const d = await r.json() as { message?: string; error?: string };
-      if (!r.ok) throw new Error(d.error || '변경 실패');
+      const d = await parseAdminJson<{ message?: string; error?: string }>(r, '변경 실패');
+      if (!r.ok) throw new Error(d.error || `변경 실패 (HTTP ${r.status})`);
       await load();
     } catch (e) { flash(e instanceof Error ? e.message : '변경 실패', true); }
     finally { if (mounted.current) setBusy(false); }
@@ -313,8 +330,8 @@ export default function DopamineAdmin() {
         method:  'DELETE', headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ id }),
       });
-      const d = await r.json() as { message?: string; error?: string };
-      if (!r.ok) throw new Error(d.error || '삭제 실패');
+      const d = await parseAdminJson<{ message?: string; error?: string }>(r, '삭제 실패');
+      if (!r.ok) throw new Error(d.error || `삭제 실패 (HTTP ${r.status})`);
       flash(d.message || '삭제했습니다.');
       await load();
     } catch (e) { flash(e instanceof Error ? e.message : '삭제 실패', true); }
