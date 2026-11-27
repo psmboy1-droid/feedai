@@ -5,14 +5,6 @@
  */
 
 import { getSupabaseServer } from './supabase';
-import {
-    DOPAMINE_INSTAGRAM_R2_PREFIX,
-    MAX_R2_BYTES,
-    deleteFromR2ByUrlWithPrefix,
-    getR2StorageStats,
-    isDopamineInstagramR2Url,
-    uploadToR2,
-} from './r2';
 
 export type Platform = 'youtube' | 'tiktok' | 'instagram';
 export type Country  = 'KR' | 'US' | 'JP';
@@ -470,168 +462,8 @@ function extractReels(
     }
 }
 
-const INSTAGRAM_THUMB_CONCURRENCY     = 8;
-const INSTAGRAM_THUMB_TIMEOUT_MS      = 3_000;
-const INSTAGRAM_THUMB_MAX_BYTES       = 1 * 1024 * 1024; // 1 MB
-const INSTAGRAM_THUMB_PHASE_BUDGET_MS = 15_000;
-const STALE_DELETE_CHUNK_SIZE         = 40;
-const DEFAULT_SOFT_BUDGET_MS          = 75_000;
-
-function sanitizeR2Segment(raw: string): string {
-    return (raw || 'item').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
-}
-
-function detectImageFormat(bytes: Uint8Array, contentType: string): { mime: string; ext: string } | null {
-    if (bytes.byteLength < 12) return null;
-    if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
-        return { mime: 'image/jpeg', ext: 'jpg' };
-    }
-    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
-        return { mime: 'image/png', ext: 'png' };
-    }
-    if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) {
-        return { mime: 'image/gif', ext: 'gif' };
-    }
-    if (
-        bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
-        bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
-    ) {
-        return { mime: 'image/webp', ext: 'webp' };
-    }
-    if (contentType === 'image/jpeg' || contentType === 'image/jpg') return { mime: 'image/jpeg', ext: 'jpg' };
-    if (contentType === 'image/png') return { mime: 'image/png', ext: 'png' };
-    if (contentType === 'image/webp') return { mime: 'image/webp', ext: 'webp' };
-    return null;
-}
-
-/** 스트리밍 다운로드 (타임아웃 + 바이트 상한 엄격 적용으로 1GB RAM 서버 보호) */
-async function fetchBinaryWithLimit(
-    url: string,
-    opts: { maxBytes: number; timeoutMs: number }
-): Promise<{ bytes: Uint8Array; contentType: string }> {
-    const parsed = new URL(url);
-    if (parsed.protocol !== 'https:') {
-        throw new Error('허용되지 않은 미디어 URL 프로토콜입니다.');
-    }
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(new Error('다운로드 시간 초과')), opts.timeoutMs);
-
-    try {
-        const res = await fetch(url, {
-            method: 'GET',
-            signal: controller.signal,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                'Accept': '*/*',
-            },
-        });
-
-        if (!res.ok) {
-            throw new Error(`미디어 다운로드 실패 (${res.status})`);
-        }
-
-        const contentLengthHeader = res.headers.get('content-length');
-        if (contentLengthHeader) {
-            const declared = Number(contentLengthHeader);
-            if (Number.isFinite(declared) && declared > opts.maxBytes) {
-                await res.body?.cancel().catch(() => {});
-                throw new Error(`용량 상한 초과 (${declared} > ${opts.maxBytes})`);
-            }
-        }
-
-        const reader = res.body?.getReader();
-        if (!reader) {
-            throw new Error('빈 미디어 응답입니다.');
-        }
-
-        const chunks: Uint8Array[] = [];
-        let totalBytes = 0;
-
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (!value || value.byteLength === 0) continue;
-
-            totalBytes += value.byteLength;
-            if (totalBytes > opts.maxBytes) {
-                await reader.cancel().catch(() => {});
-                controller.abort(new Error('용량 상한 초과'));
-                throw new Error(`용량 상한 초과 (> ${opts.maxBytes} bytes)`);
-            }
-            chunks.push(value);
-        }
-
-        if (totalBytes === 0) {
-            throw new Error('빈 미디어 파일입니다.');
-        }
-
-        const merged = new Uint8Array(totalBytes);
-        let offset = 0;
-        for (const chunk of chunks) {
-            merged.set(chunk, offset);
-            offset += chunk.byteLength;
-        }
-
-        const contentType = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-        return { bytes: merged, contentType };
-    } finally {
-        clearTimeout(timer);
-    }
-}
-
-async function recordInstagramR2File(
-    supabase: ReturnType<typeof getSupabaseServer>,
-    opts: { key: string; publicUrl: string; contentType: string; fileSize: number }
-): Promise<void> {
-    try {
-        const { error } = await supabase.from('r2_media_files').insert({
-            object_key:   opts.key,
-            public_url:   opts.publicUrl,
-            category:     'dopamine_instagram',
-            content_type: opts.contentType,
-            file_size:    opts.fileSize,
-        });
-        if (error) {
-            console.warn('[Instagram R2] r2_media_files 기록 경고:', error.message);
-        }
-    } catch (err) {
-        console.warn('[Instagram R2] r2_media_files 기록 예외:', err);
-    }
-}
-
-async function uploadInstagramThumbnailToR2(
-    supabase: ReturnType<typeof getSupabaseServer>,
-    thumbUrl: string,
-    country: Country,
-    safeId: string,
-    softDeadlineAt: number
-): Promise<string | null> {
-    if (!thumbUrl) return null;
-    const remainingMs = softDeadlineAt - Date.now();
-    if (remainingMs < 1_000) return null;
-
-    const { bytes, contentType } = await fetchBinaryWithLimit(thumbUrl, {
-        maxBytes:  INSTAGRAM_THUMB_MAX_BYTES,
-        timeoutMs: Math.min(INSTAGRAM_THUMB_TIMEOUT_MS, remainingMs),
-    });
-    const imgInfo = detectImageFormat(bytes, contentType);
-    if (!imgInfo) return null;
-
-    const key = `${DOPAMINE_INSTAGRAM_R2_PREFIX}${country.toLowerCase()}/${safeId}-thumb-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${imgInfo.ext}`;
-    const publicUrl = await uploadToR2({
-        key,
-        body:        bytes,
-        contentType: imgInfo.mime,
-    });
-    await recordInstagramR2File(supabase, {
-        key,
-        publicUrl,
-        contentType: imgInfo.mime,
-        fileSize:    bytes.byteLength,
-    });
-    return publicUrl;
-}
+const STALE_DELETE_CHUNK_SIZE = 40;
+const DEFAULT_SOFT_BUDGET_MS  = 75_000;
 
 async function collectInstagram(
     keyword: string,
@@ -697,27 +529,7 @@ async function collectAndSyncInstagram(
         };
     }
 
-    // 1. 기존 DB 레코드 선조회 (유효 R2 썸네일 재사용 + 교체 후 구파일/구 .mp4 정리용)
-    const { data: existingRows, error: existingErr } = await supabase
-        .from('trending_videos')
-        .select('video_id, play_url, thumbnail_url')
-        .eq('platform', 'instagram')
-        .eq('country', country)
-        .range(0, 999);
-
-    if (existingErr) {
-        return { count: 0, error: `기존 데이터 조회 실패: ${existingErr.message}` };
-    }
-
-    const existingMap = new Map<string, { play_url: string; thumbnail_url: string }>();
-    for (const row of existingRows ?? []) {
-        existingMap.set(row.video_id, {
-            play_url:      row.play_url || '',
-            thumbnail_url: row.thumbnail_url || '',
-        });
-    }
-
-    // 2. StarAPI에서 원본 .mp4 URL을 포함한 릴스 목록 수집 (영상 .mp4는 다운로드하지 않음)
+    // 1. StarAPI에서 원본 .mp4 URL과 중간 해상도 썸네일 URL 수집 (R2 업로드 없음)
     let candidates: TrendingVideo[] = [];
     try {
         candidates = await collectInstagram(keyword, country, displayLimit, softDeadlineAt);
@@ -725,76 +537,14 @@ async function collectAndSyncInstagram(
         return { count: 0, error: e instanceof Error ? e.message : '인스타그램 수집 실패' };
     }
 
-    // 수집 결과가 0건이면 기존 DB·기존 R2 파일을 절대 건드리지 않고 에러 반환
+    // 수집 결과가 0건이면 기존 DB를 절대 건드리지 않고 에러 반환
     if (candidates.length === 0) {
         return { count: 0, error: '수집된 인스타그램 영상이 없습니다.' };
     }
 
-    // 3. R2 저장소 여유 용량 확인 (한도 초과 시에도 R2 업로드만 생략하고 원본 썸네일 URL fallback 사용)
-    const stats = await getR2StorageStats(supabase);
-    const canUploadThumbToR2 = stats.totalBytes < MAX_R2_BYTES;
-
-    // 4. 경량 썸네일 R2 저장 (동시 최대 8개, 3초 타임아웃, 최대 1MB, 최대 15초 단계 예산, 실패 시 원본 URL fallback)
-    const thumbDeadlineAt = Math.min(softDeadlineAt, Date.now() + INSTAGRAM_THUMB_PHASE_BUDGET_MS);
-    const processedSlots: TrendingVideo[] = candidates.map(c => ({ ...c }));
-    const newlyUploadedThumbUrls: string[] = [];
-    let nextIdx = 0;
-
-    async function thumbWorker(): Promise<void> {
-        while (true) {
-            if (Date.now() >= thumbDeadlineAt) break;
-            const idx = nextIdx++;
-            if (idx >= candidates.length) break;
-
-            const cand = candidates[idx];
-            const prev = existingMap.get(cand.video_id);
-            const rawId = cand.video_id.replace(/_[A-Z]{2}$/, '');
-            const safeId = sanitizeR2Segment(rawId);
-
-            // 기존 DB에 이미 유효한 R2 썸네일이 있으면 재사용
-            if (prev?.thumbnail_url && isDopamineInstagramR2Url(prev.thumbnail_url)) {
-                processedSlots[idx] = {
-                    ...cand,
-                    thumbnail_url: prev.thumbnail_url,
-                };
-                continue;
-            }
-
-            if (!cand.thumbnail_url || !canUploadThumbToR2) {
-                continue;
-            }
-
-            try {
-                const uploadedThumb = await uploadInstagramThumbnailToR2(
-                    supabase,
-                    cand.thumbnail_url,
-                    country,
-                    safeId,
-                    thumbDeadlineAt
-                );
-                if (uploadedThumb) {
-                    newlyUploadedThumbUrls.push(uploadedThumb);
-                    processedSlots[idx] = {
-                        ...cand,
-                        thumbnail_url: uploadedThumb,
-                    };
-                }
-            } catch (thumbErr) {
-                // 썸네일 업로드 실패 시 원본 썸네일 URL 유지 (영상 수집 자체는 유지)
-                console.warn(
-                    `[Instagram R2] 썸네일 fallback (${cand.video_id}):`,
-                    thumbErr instanceof Error ? thumbErr.message : thumbErr
-                );
-            }
-        }
-    }
-
-    const workerCount = Math.min(INSTAGRAM_THUMB_CONCURRENCY, candidates.length);
-    await Promise.all(Array.from({ length: workerCount }, () => thumbWorker()));
-
-    // 5. 중복 제거 및 rank_order 순차 재부여 (play_url은 StarAPI 원본 .mp4 URL 그대로 저장)
+    // 2. 중복 제거 및 rank_order 순차 재부여 (설정된 displayLimit 이내 정확히 유지)
     const uniqueMap = new Map<string, TrendingVideo>();
-    for (const item of processedSlots) {
+    for (const item of candidates) {
         if (!uniqueMap.has(item.video_id)) {
             uniqueMap.set(item.video_id, item);
         }
@@ -807,35 +557,38 @@ async function collectAndSyncInstagram(
         video_type: 'shorts',
     }));
 
-    // 6. DB 교체 (선 upsert → 후 실제 DB 재조회 후 미포함 구/초과 레코드 청크 삭제)
+    // 3. DB 교체 (선 upsert → 후 실제 DB 재조회 후 미포함 구/초과 레코드 40건씩 청크 삭제)
     const { error: upsertErr } = await supabase
         .from('trending_videos')
         .upsert(finalVideos, { onConflict: 'video_id' });
 
     if (upsertErr) {
-        for (const url of newlyUploadedThumbUrls) {
-            await deleteFromR2ByUrlWithPrefix(supabase, url, DOPAMINE_INSTAGRAM_R2_PREFIX).catch(() => {});
-        }
         return { count: 0, error: `저장 실패: ${upsertErr.message}` };
     }
 
     const newVideoIdSet = new Set(finalVideos.map(v => v.video_id));
 
-    // upsert 후 실제 DB에 남아있는 해당 플랫폼·국가 전체 행을 다시 조회해 초과/구 레코드를 빠짐없이 색출
     const { data: currentDbRows, error: currentDbErr } = await supabase
         .from('trending_videos')
-        .select('video_id, play_url, thumbnail_url')
+        .select('video_id')
         .eq('platform', 'instagram')
         .eq('country', country)
         .range(0, 999);
 
     if (currentDbErr) {
-        console.warn('[Instagram] 최신 DB 목록 재조회 경고:', currentDbErr.message);
+        return {
+            count: 0,
+            error: `기존 초과 레코드 조회 실패: ${currentDbErr.message}`,
+        };
     }
 
-    const combinedBeforeCleanup = currentDbRows ?? existingRows ?? [];
-    const staleRows = combinedBeforeCleanup.filter(r => !newVideoIdSet.has(r.video_id));
-    const staleVideoIds = Array.from(new Set(staleRows.map(r => r.video_id)));
+    const staleVideoIds = Array.from(
+        new Set(
+            (currentDbRows ?? [])
+                .map(r => r.video_id)
+                .filter(id => !newVideoIdSet.has(id))
+        )
+    );
 
     // PostgREST URL 길이 초과 방지를 위해 40건씩 안전 청크 삭제
     for (let i = 0; i < staleVideoIds.length; i += STALE_DELETE_CHUNK_SIZE) {
@@ -853,32 +606,6 @@ async function collectAndSyncInstagram(
                 error: `기존 초과 레코드 정리 실패: ${staleDelErr.message}`,
             };
         }
-    }
-
-    // 7. 마지막 구파일 삭제 (이전 DB·초과 레코드의 play_url·thumbnail_url 중 새 목록에 없는 dopamine/instagram/ 키만 안전 삭제)
-    const newReferencedUrls = new Set<string>();
-    for (const v of finalVideos) {
-        if (v.play_url) newReferencedUrls.add(v.play_url);
-        if (v.thumbnail_url) newReferencedUrls.add(v.thumbnail_url);
-    }
-
-    const cleanupUrls = new Set<string>();
-    for (const row of [...(existingRows ?? []), ...staleRows]) {
-        if (row.play_url && !newReferencedUrls.has(row.play_url) && isDopamineInstagramR2Url(row.play_url)) {
-            cleanupUrls.add(row.play_url);
-        }
-        if (row.thumbnail_url && !newReferencedUrls.has(row.thumbnail_url) && isDopamineInstagramR2Url(row.thumbnail_url)) {
-            cleanupUrls.add(row.thumbnail_url);
-        }
-    }
-    for (const uploadedUrl of newlyUploadedThumbUrls) {
-        if (!newReferencedUrls.has(uploadedUrl) && isDopamineInstagramR2Url(uploadedUrl)) {
-            cleanupUrls.add(uploadedUrl);
-        }
-    }
-
-    for (const oldUrl of cleanupUrls) {
-        await deleteFromR2ByUrlWithPrefix(supabase, oldUrl, DOPAMINE_INSTAGRAM_R2_PREFIX).catch(() => {});
     }
 
     return {
@@ -907,7 +634,7 @@ export async function collectTrending(
     const keyword      = settings?.search_keyword || '인기';
     const displayLimit = Math.min(100, Math.max(1, settings?.display_limit ?? 20));
 
-    // 인스타그램은 R2 저장 + 무중단 교체 + 구파일 정리 전용 파이프라인 사용
+    // 인스타그램은 DB 텍스트(URL) 저장 + 청크 구레코드 정리 전용 파이프라인 사용 (R2 미사용)
     if (platform === 'instagram') {
         const softDeadlineAt = options?.deadlineAt ?? (Date.now() + DEFAULT_SOFT_BUDGET_MS);
         return collectAndSyncInstagram(supabase, keyword, country, displayLimit, softDeadlineAt);
