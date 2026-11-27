@@ -13,6 +13,8 @@ const querySchema = z.object({
   platform:  z.enum(['youtube', 'tiktok', 'instagram']).default('youtube'),
   country:   z.enum(['KR', 'US', 'JP']).default('KR'),
   videoType: z.enum(['shorts', 'video']).optional(),
+  offset:    z.coerce.number().int().min(0).optional(),
+  limit:     z.coerce.number().int().min(1).max(100).optional(),
 });
 
 // ── 타입 ───────────────────────────────────────────────────────────────────
@@ -25,7 +27,6 @@ interface VideoItem {
   country: string;
   play_url: string;
   rank_order: number;
-  created_at: string;
   isAd: false;
   displayRank: number;
 }
@@ -56,20 +57,22 @@ export async function GET(req: Request) {
     platform:  params.get('platform')  ?? undefined,
     country:   params.get('country')   ?? undefined,
     videoType: params.get('videoType') ?? undefined,
+    offset:    params.get('offset')    ?? undefined,
+    limit:     params.get('limit')     ?? undefined,
   });
   if (!parsed.success) {
     return Response.json({ error: '잘못된 요청 파라미터입니다.' }, { status: 400 });
   }
-  const { platform, country, videoType } = parsed.data;
+  const { platform, country, videoType, offset, limit } = parsed.data;
   const activeVideoType = platform === 'youtube' ? (videoType ?? 'shorts') : 'shorts';
 
   try {
     const supabase = getSupabaseServer();
 
-    // 1) 영상 목록 쿼리 준비 (YouTube인 경우 video_type 일치 조건)
+    // 1) 영상 목록 쿼리 준비 (YouTube인 경우 video_type 일치 조건, 필요한 컬럼만 경량 조회)
     let videoQuery = supabase
       .from('trending_videos')
-      .select('*')
+      .select('id, video_id, title, thumbnail_url, platform, country, play_url, rank_order')
       .eq('platform', platform)
       .eq('country', country);
 
@@ -139,15 +142,21 @@ export async function GET(req: Request) {
       });
     }
 
-    // displayRank 재계산 & displayLimit 절단
-    const items: FeedItem[] = merged
+    // displayRank 재계산 & displayLimit 절단 (선택적 offset/limit 페이징 지원)
+    const allItems: FeedItem[] = merged
       .slice(0, displayLimit + ads.length) // 광고 포함 길이 허용
       .map((item, i) => ({ ...item, displayRank: i + 1 }));
+
+    const start = offset ?? 0;
+    const items = limit !== undefined
+      ? allItems.slice(start, start + limit)
+      : allItems.slice(start);
 
     return Response.json(
       {
         items,
-        total:        videos.length,
+        total:        allItems.length,
+        hasMore:      start + items.length < allItems.length,
         displayLimit,
         videoType:    activeVideoType,
         checkedAt:    Date.now(),

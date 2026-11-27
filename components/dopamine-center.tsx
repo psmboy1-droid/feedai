@@ -56,7 +56,7 @@ interface ApiResponse {
 
 // ─── 상수 ──────────────────────────────────────────────────────────────────
 const COUNTRIES: [Country, string][] = [['KR', '한국'], ['US', '미국'], ['JP', '일본']];
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 18;
 
 // ─── HTML 엔티티 디코더 ───────────────────────────────────────────────────
 export function decodeHtmlEntities(text: string): string {
@@ -441,6 +441,8 @@ function AdCard({ item }: { item: AdItem }) {
                 src={item.media_url}
                 alt=""
                 aria-hidden
+                loading="lazy"
+                decoding="async"
                 referrerPolicy="no-referrer"
               />
               <img
@@ -448,6 +450,7 @@ function AdCard({ item }: { item: AdItem }) {
                 src={item.media_url}
                 alt={decodedTitle}
                 loading="lazy"
+                decoding="async"
                 referrerPolicy="no-referrer"
               />
             </a>
@@ -458,6 +461,8 @@ function AdCard({ item }: { item: AdItem }) {
                 src={item.media_url}
                 alt=""
                 aria-hidden
+                loading="lazy"
+                decoding="async"
                 referrerPolicy="no-referrer"
               />
               <img
@@ -465,6 +470,7 @@ function AdCard({ item }: { item: AdItem }) {
                 src={item.media_url}
                 alt={decodedTitle}
                 loading="lazy"
+                decoding="async"
                 referrerPolicy="no-referrer"
               />
             </div>

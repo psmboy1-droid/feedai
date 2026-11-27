@@ -401,6 +401,29 @@ export function extractInstagramMp4Url(node: any): string {
     return '';
 }
 
+/**
+ * 1080px 대용량 원본 대신 카드 표시에 충분한 중간 해상도(width 360~640px 우선, 없으면 가장 작은 유효 후보) 선택
+ */
+function selectInstagramThumbnailUrl(node: any): string {
+    const raw = node?.image_versions2?.candidates;
+    if (!Array.isArray(raw) || raw.length === 0) return '';
+
+    const valid = raw.filter((c: any) => typeof c?.url === 'string' && c.url.length > 0);
+    if (valid.length === 0) return '';
+
+    const medium = valid
+        .filter((c: any) => typeof c.width === 'number' && c.width >= 360 && c.width <= 640)
+        .sort((a: any, b: any) => Math.abs(a.width - 480) - Math.abs(b.width - 480));
+    if (medium.length > 0) return medium[0].url;
+
+    const withWidth = valid
+        .filter((c: any) => typeof c.width === 'number' && c.width > 0)
+        .sort((a: any, b: any) => a.width - b.width);
+    if (withWidth.length > 0) return withWidth[0].url;
+
+    return valid[valid.length - 1].url || valid[0].url || '';
+}
+
 function extractReels(
     node: any,
     results: TrendingVideo[],
@@ -420,7 +443,7 @@ function extractReels(
     if ((node.media_type === 2 || node.feed_type === 'clips') && videoUrl) {
         const rawId    = node.pk || node.id || '';
         const rawTitle = node.caption?.text || '';
-        const thumb    = node.image_versions2?.candidates?.[0]?.url || '';
+        const thumb    = selectInstagramThumbnailUrl(node);
         const compositeId = `${rawId}_${country}`;
 
         if (rawId && !seenIds.has(compositeId)) {
@@ -447,10 +470,12 @@ function extractReels(
     }
 }
 
-const INSTAGRAM_THUMB_CONCURRENCY = 4;
-const INSTAGRAM_THUMB_TIMEOUT_MS  = 5_000;
-const INSTAGRAM_THUMB_MAX_BYTES   = 1 * 1024 * 1024; // 1 MB
-const DEFAULT_SOFT_BUDGET_MS      = 75_000;
+const INSTAGRAM_THUMB_CONCURRENCY     = 8;
+const INSTAGRAM_THUMB_TIMEOUT_MS      = 3_000;
+const INSTAGRAM_THUMB_MAX_BYTES       = 1 * 1024 * 1024; // 1 MB
+const INSTAGRAM_THUMB_PHASE_BUDGET_MS = 15_000;
+const STALE_DELETE_CHUNK_SIZE         = 40;
+const DEFAULT_SOFT_BUDGET_MS          = 75_000;
 
 function sanitizeR2Segment(raw: string): string {
     return (raw || 'item').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
@@ -634,7 +659,7 @@ async function collectInstagram(
                 'x-rapidapi-host': 'starapi1.p.rapidapi.com',
             },
             body: JSON.stringify(body),
-            signal: AbortSignal.timeout(15000),
+            signal: AbortSignal.timeout(page === 0 ? 12_000 : 8_000),
         });
 
         if (!res.ok) {
@@ -654,7 +679,7 @@ async function collectInstagram(
         page++;
     }
 
-    return videos.map((v, i) => ({ ...v, rank_order: i + 1 }));
+    return videos.slice(0, limit).map((v, i) => ({ ...v, rank_order: i + 1 }));
 }
 
 async function collectAndSyncInstagram(
@@ -677,7 +702,8 @@ async function collectAndSyncInstagram(
         .from('trending_videos')
         .select('video_id, play_url, thumbnail_url')
         .eq('platform', 'instagram')
-        .eq('country', country);
+        .eq('country', country)
+        .range(0, 999);
 
     if (existingErr) {
         return { count: 0, error: `기존 데이터 조회 실패: ${existingErr.message}` };
@@ -708,14 +734,15 @@ async function collectAndSyncInstagram(
     const stats = await getR2StorageStats(supabase);
     const canUploadThumbToR2 = stats.totalBytes < MAX_R2_BYTES;
 
-    // 4. 경량 썸네일 R2 저장 (동시 최대 4개, 5초 타임아웃, 최대 1MB, 실패 시 원본 URL fallback)
+    // 4. 경량 썸네일 R2 저장 (동시 최대 8개, 3초 타임아웃, 최대 1MB, 최대 15초 단계 예산, 실패 시 원본 URL fallback)
+    const thumbDeadlineAt = Math.min(softDeadlineAt, Date.now() + INSTAGRAM_THUMB_PHASE_BUDGET_MS);
     const processedSlots: TrendingVideo[] = candidates.map(c => ({ ...c }));
     const newlyUploadedThumbUrls: string[] = [];
     let nextIdx = 0;
 
     async function thumbWorker(): Promise<void> {
         while (true) {
-            if (Date.now() >= softDeadlineAt) break;
+            if (Date.now() >= thumbDeadlineAt) break;
             const idx = nextIdx++;
             if (idx >= candidates.length) break;
 
@@ -743,7 +770,7 @@ async function collectAndSyncInstagram(
                     cand.thumbnail_url,
                     country,
                     safeId,
-                    softDeadlineAt
+                    thumbDeadlineAt
                 );
                 if (uploadedThumb) {
                     newlyUploadedThumbUrls.push(uploadedThumb);
@@ -780,7 +807,7 @@ async function collectAndSyncInstagram(
         video_type: 'shorts',
     }));
 
-    // 6. DB 교체 (선 upsert → 후 미포함 해당 국가 구 레코드 삭제)
+    // 6. DB 교체 (선 upsert → 후 실제 DB 재조회 후 미포함 구/초과 레코드 청크 삭제)
     const { error: upsertErr } = await supabase
         .from('trending_videos')
         .upsert(finalVideos, { onConflict: 'video_id' });
@@ -793,24 +820,42 @@ async function collectAndSyncInstagram(
     }
 
     const newVideoIdSet = new Set(finalVideos.map(v => v.video_id));
-    const staleVideoIds = (existingRows ?? [])
-        .map(r => r.video_id)
-        .filter(id => !newVideoIdSet.has(id));
 
-    if (staleVideoIds.length > 0) {
+    // upsert 후 실제 DB에 남아있는 해당 플랫폼·국가 전체 행을 다시 조회해 초과/구 레코드를 빠짐없이 색출
+    const { data: currentDbRows, error: currentDbErr } = await supabase
+        .from('trending_videos')
+        .select('video_id, play_url, thumbnail_url')
+        .eq('platform', 'instagram')
+        .eq('country', country)
+        .range(0, 999);
+
+    if (currentDbErr) {
+        console.warn('[Instagram] 최신 DB 목록 재조회 경고:', currentDbErr.message);
+    }
+
+    const combinedBeforeCleanup = currentDbRows ?? existingRows ?? [];
+    const staleRows = combinedBeforeCleanup.filter(r => !newVideoIdSet.has(r.video_id));
+    const staleVideoIds = Array.from(new Set(staleRows.map(r => r.video_id)));
+
+    // PostgREST URL 길이 초과 방지를 위해 40건씩 안전 청크 삭제
+    for (let i = 0; i < staleVideoIds.length; i += STALE_DELETE_CHUNK_SIZE) {
+        const chunk = staleVideoIds.slice(i, i + STALE_DELETE_CHUNK_SIZE);
         const { error: staleDelErr } = await supabase
             .from('trending_videos')
             .delete()
             .eq('platform', 'instagram')
             .eq('country', country)
-            .in('video_id', staleVideoIds);
+            .in('video_id', chunk);
 
         if (staleDelErr) {
-            console.warn('[Instagram] 구 DB 레코드 정리 경고:', staleDelErr.message);
+            return {
+                count: 0,
+                error: `기존 초과 레코드 정리 실패: ${staleDelErr.message}`,
+            };
         }
     }
 
-    // 7. 마지막 구파일 삭제 (이전 DB의 play_url·thumbnail_url 중 새 목록에 없는 dopamine/instagram/ 키만 안전 삭제)
+    // 7. 마지막 구파일 삭제 (이전 DB·초과 레코드의 play_url·thumbnail_url 중 새 목록에 없는 dopamine/instagram/ 키만 안전 삭제)
     const newReferencedUrls = new Set<string>();
     for (const v of finalVideos) {
         if (v.play_url) newReferencedUrls.add(v.play_url);
@@ -818,7 +863,7 @@ async function collectAndSyncInstagram(
     }
 
     const cleanupUrls = new Set<string>();
-    for (const row of existingRows ?? []) {
+    for (const row of [...(existingRows ?? []), ...staleRows]) {
         if (row.play_url && !newReferencedUrls.has(row.play_url) && isDopamineInstagramR2Url(row.play_url)) {
             cleanupUrls.add(row.play_url);
         }
