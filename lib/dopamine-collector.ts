@@ -445,9 +445,23 @@ function selectInstagramThumbnailUrl(node: any): string {
     return valid[valid.length - 1].url || valid[0].url || '';
 }
 
+interface InstagramCandidate {
+    video: TrendingVideo;
+    score: number;
+}
+
+function parseInstagramHashtags(keyword: string): string[] {
+    const tags = (keyword || '')
+        .split(',')
+        .map(part => part.trim().replace(/#+/g, '').trim())
+        .filter(Boolean);
+    const unique = Array.from(new Set(tags));
+    return unique.length > 0 ? unique : ['인기'];
+}
+
 function extractReels(
     node: any,
-    results: TrendingVideo[],
+    results: InstagramCandidate[],
     seenIds: Set<string>,
     country: Country,
     limit: number
@@ -463,22 +477,37 @@ function extractReels(
     const videoUrl = extractInstagramMp4Url(node);
     if ((node.media_type === 2 || node.feed_type === 'clips') && videoUrl) {
         const rawId    = node.pk || node.id || '';
-        const rawTitle = node.caption?.text || '';
-        const thumb    = selectInstagramThumbnailUrl(node);
-        const compositeId = `${rawId}_${country}`;
+        const rawTitle = typeof node.caption?.text === 'string' ? node.caption.text : '';
+        const hashtagCount = (rawTitle.match(/#/g) || []).length;
 
-        if (rawId && !seenIds.has(compositeId)) {
-            seenIds.add(compositeId);
-            results.push({
-                video_id:      compositeId,
-                title:         safeTitle(rawTitle, 30, true),
-                thumbnail_url: thumb,
-                platform:      'instagram',
-                country,
-                play_url:      videoUrl,
-                rank_order:    results.length + 1,
-                video_type:    'shorts',
-            });
+        // 본문에 해시태그(#)가 20개 이상 도배된 스팸 게시물 제외
+        if (hashtagCount < 20) {
+            const thumb       = selectInstagramThumbnailUrl(node);
+            const compositeId = `${rawId}_${country}`;
+
+            if (rawId && !seenIds.has(compositeId)) {
+                seenIds.add(compositeId);
+                const playCount = Number(node.play_count);
+                const likeCount = Number(node.like_count);
+                const score =
+                    Number.isFinite(playCount) && playCount > 0
+                        ? playCount
+                        : (Number.isFinite(likeCount) && likeCount > 0 ? likeCount : 0);
+
+                results.push({
+                    video: {
+                        video_id:      compositeId,
+                        title:         safeTitle(rawTitle, 30, true),
+                        thumbnail_url: thumb,
+                        platform:      'instagram',
+                        country,
+                        play_url:      videoUrl,
+                        rank_order:    results.length + 1,
+                        video_type:    'shorts',
+                    },
+                    score,
+                });
+            }
         }
     }
 
@@ -500,62 +529,83 @@ async function collectInstagram(
     limit: number,
     softDeadlineAt?: number
 ): Promise<TrendingVideo[]> {
-    const videos: TrendingVideo[] = [];
+    const tags = parseInstagramHashtags(keyword);
+    const maxPagesPerTag = tags.length === 1 ? 7 : 4;
+    const candidates: InstagramCandidate[] = [];
     const seenIds = new Set<string>();
-    let nextMaxId: string | undefined;
-    let page = 0;
+    let lastError: unknown;
+    let deadlineReached = false;
 
-    while (page < 7 && videos.length < limit) {
-        if (softDeadlineAt && page > 0 && videos.length > 0 && Date.now() >= softDeadlineAt - 15_000) {
+    for (const tag of tags) {
+        if (candidates.length >= limit || deadlineReached) break;
+        if (softDeadlineAt && candidates.length > 0 && Date.now() >= softDeadlineAt - 15_000) {
             break;
         }
 
-        const body: Record<string, string> = { name: keyword, tab: 'top' };
-        if (nextMaxId) body['next_max_id'] = nextMaxId;
+        let nextMaxId: string | undefined;
+        let page = 0;
 
-        try {
-            const res = await fetchRapidApiWithRetry('https://starapi1.p.rapidapi.com/instagram/hashtag/get_media', {
-                method: 'POST',
-                headers: {
-                    'content-type':    'application/json',
-                    'x-rapidapi-host': 'starapi1.p.rapidapi.com',
-                },
-                body: JSON.stringify(body),
-                timeoutMs:  page === 0 ? 20_000 : 15_000,
-                deadlineAt: softDeadlineAt,
-            });
-
-            if (!res.ok) {
-                const errText = await res.text().catch(() => '');
-                if (page > 0 && videos.length > 0) {
-                    console.warn(
-                        `[Instagram] page=${page} HTTP ${res.status} 오류로 중단, 기존 수집분(${videos.length}건) 유지`
-                    );
-                    break;
-                }
-                throw new Error(`Instagram API 오류 (${res.status}): ${errText.slice(0, 200)}`);
+        while (page < maxPagesPerTag && candidates.length < limit) {
+            if (softDeadlineAt && candidates.length > 0 && Date.now() >= softDeadlineAt - 15_000) {
+                deadlineReached = true;
+                break;
             }
 
-            const data = await res.json() as any;
-            extractReels(data, videos, seenIds, country, limit);
+            const body: Record<string, string> = { name: tag, tab: 'top' };
+            if (nextMaxId) body['next_max_id'] = nextMaxId;
 
-            const newNextMaxId = data?.next_max_id || data?.response?.body?.next_max_id || undefined;
-            if (!newNextMaxId || newNextMaxId === nextMaxId) break;
-            nextMaxId = newNextMaxId;
-            page++;
-        } catch (err) {
-            if (page > 0 && videos.length > 0) {
+            try {
+                const res = await fetchRapidApiWithRetry('https://starapi1.p.rapidapi.com/instagram/hashtag/get_media', {
+                    method: 'POST',
+                    headers: {
+                        'content-type':    'application/json',
+                        'x-rapidapi-host': 'starapi1.p.rapidapi.com',
+                    },
+                    body: JSON.stringify(body),
+                    timeoutMs:  page === 0 && candidates.length === 0 ? 20_000 : 15_000,
+                    deadlineAt: softDeadlineAt,
+                });
+
+                if (!res.ok) {
+                    const errText = await res.text().catch(() => '');
+                    const err = new Error(`Instagram API 오류 (${res.status}): ${errText.slice(0, 200)}`);
+                    lastError = err;
+                    if (candidates.length > 0) {
+                        console.warn(
+                            `[Instagram] tag=${tag} page=${page} HTTP ${res.status} 오류로 중단, 기존 수집분(${candidates.length}건) 유지`
+                        );
+                        break;
+                    }
+                    throw err;
+                }
+
+                const data = await res.json() as any;
+                extractReels(data, candidates, seenIds, country, limit);
+
+                const newNextMaxId = data?.next_max_id || data?.response?.body?.next_max_id || undefined;
+                if (!newNextMaxId || newNextMaxId === nextMaxId) break;
+                nextMaxId = newNextMaxId;
+                page++;
+            } catch (err) {
+                lastError = err;
                 console.warn(
-                    `[Instagram] page=${page} 요청 실패로 중단, 기존 수집분(${videos.length}건) 유지:`,
+                    `[Instagram] tag=${tag} page=${page} 요청 실패(누적 ${candidates.length}건):`,
                     err instanceof Error ? err.message : err
                 );
                 break;
             }
-            throw err;
         }
     }
 
-    return videos.slice(0, limit).map((v, i) => ({ ...v, rank_order: i + 1 }));
+    if (candidates.length === 0 && lastError) {
+        throw lastError;
+    }
+
+    // 다중 해시태그에서 모은 후보를 조회수(play_count, 없으면 like_count) 내림차순 정렬 후 limit개만 채택
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates
+        .slice(0, limit)
+        .map((c, i) => ({ ...c.video, rank_order: i + 1 }));
 }
 
 async function collectAndSyncInstagram(
