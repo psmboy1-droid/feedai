@@ -52,7 +52,7 @@ function getShuffledRapidApiKeys(): string[] {
     return shuffled;
 }
 
-/** RapidAPI 키 자동 로테이션 및 재시도 호출 헬퍼 (401, 403, 429 시 다음 키로 재시도) */
+/** RapidAPI 키 자동 로테이션 및 재시도 호출 헬퍼 (401, 403, 429 또는 타임아웃/네트워크 오류 시 다음 키로 독립 타임아웃 재시도) */
 export async function fetchRapidApiWithRetry(
     url: string,
     options: {
@@ -60,16 +60,42 @@ export async function fetchRapidApiWithRetry(
         headers: Record<string, string>;
         body?: string;
         signal?: AbortSignal;
+        timeoutMs?: number;
+        deadlineAt?: number;
     }
 ): Promise<Response> {
     const keys = getShuffledRapidApiKeys();
     let lastRes: Response | undefined;
     let lastErr: unknown;
 
-    for (const key of keys) {
+    for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+
+        // 외부에서 이미 취소된 signal이거나 전체 마감 직전이면 추가 키 시도 중단
+        if (options.signal?.aborted) {
+            break;
+        }
+        if (i > 0 && options.deadlineAt && Date.now() >= options.deadlineAt - 5_000) {
+            break;
+        }
+
+        let perAttemptSignal = options.signal;
+        if (options.timeoutMs) {
+            const remaining = options.deadlineAt
+                ? Math.max(5_000, options.deadlineAt - Date.now())
+                : options.timeoutMs;
+            const effectiveMs = Math.min(options.timeoutMs, remaining);
+            const attemptTimeout = AbortSignal.timeout(effectiveMs);
+            perAttemptSignal = options.signal
+                ? AbortSignal.any([options.signal, attemptTimeout])
+                : attemptTimeout;
+        }
+
         try {
             const res = await fetch(url, {
-                ...options,
+                method:  options.method,
+                body:    options.body,
+                signal:  perAttemptSignal,
                 headers: {
                     ...options.headers,
                     'x-rapidapi-key': key,
@@ -83,6 +109,9 @@ export async function fetchRapidApiWithRetry(
             return res;
         } catch (err) {
             lastErr = err;
+            console.warn(
+                `[RapidAPI] 키 #${i + 1} 요청 예외 (${err instanceof Error ? err.message : String(err)}), 다음 키로 재시도합니다.`
+            );
         }
     }
 
@@ -477,38 +506,53 @@ async function collectInstagram(
     let page = 0;
 
     while (page < 7 && videos.length < limit) {
-        if (softDeadlineAt && page > 0 && videos.length > 0 && Date.now() >= softDeadlineAt - 10_000) {
+        if (softDeadlineAt && page > 0 && videos.length > 0 && Date.now() >= softDeadlineAt - 15_000) {
             break;
         }
 
         const body: Record<string, string> = { name: keyword, tab: 'top' };
         if (nextMaxId) body['next_max_id'] = nextMaxId;
 
-        const res = await fetchRapidApiWithRetry('https://starapi1.p.rapidapi.com/instagram/hashtag/get_media', {
-            method: 'POST',
-            headers: {
-                'content-type':    'application/json',
-                'x-rapidapi-host': 'starapi1.p.rapidapi.com',
-            },
-            body: JSON.stringify(body),
-            signal: AbortSignal.timeout(page === 0 ? 12_000 : 8_000),
-        });
+        try {
+            const res = await fetchRapidApiWithRetry('https://starapi1.p.rapidapi.com/instagram/hashtag/get_media', {
+                method: 'POST',
+                headers: {
+                    'content-type':    'application/json',
+                    'x-rapidapi-host': 'starapi1.p.rapidapi.com',
+                },
+                body: JSON.stringify(body),
+                timeoutMs:  page === 0 ? 20_000 : 15_000,
+                deadlineAt: softDeadlineAt,
+            });
 
-        if (!res.ok) {
-            if (page === 0) {
+            if (!res.ok) {
                 const errText = await res.text().catch(() => '');
+                if (page > 0 && videos.length > 0) {
+                    console.warn(
+                        `[Instagram] page=${page} HTTP ${res.status} 오류로 중단, 기존 수집분(${videos.length}건) 유지`
+                    );
+                    break;
+                }
                 throw new Error(`Instagram API 오류 (${res.status}): ${errText.slice(0, 200)}`);
             }
-            break;
+
+            const data = await res.json() as any;
+            extractReels(data, videos, seenIds, country, limit);
+
+            const newNextMaxId = data?.next_max_id || data?.response?.body?.next_max_id || undefined;
+            if (!newNextMaxId || newNextMaxId === nextMaxId) break;
+            nextMaxId = newNextMaxId;
+            page++;
+        } catch (err) {
+            if (page > 0 && videos.length > 0) {
+                console.warn(
+                    `[Instagram] page=${page} 요청 실패로 중단, 기존 수집분(${videos.length}건) 유지:`,
+                    err instanceof Error ? err.message : err
+                );
+                break;
+            }
+            throw err;
         }
-
-        const data = await res.json() as any;
-        extractReels(data, videos, seenIds, country, limit);
-
-        const newNextMaxId = data?.next_max_id || data?.response?.body?.next_max_id || undefined;
-        if (!newNextMaxId || newNextMaxId === nextMaxId) break;
-        nextMaxId = newNextMaxId;
-        page++;
     }
 
     return videos.slice(0, limit).map((v, i) => ({ ...v, rank_order: i + 1 }));

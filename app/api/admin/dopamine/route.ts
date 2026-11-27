@@ -187,8 +187,10 @@ export async function POST(req: Request) {
 
             if (d.platform && d.country) {
                 const result = await collectTrending(d.platform, d.country, { deadlineAt });
-                if (result.error && result.count === 0)
-                    return reply({ error: result.error }, 502);
+                if (result.error && result.count === 0) {
+                    console.error('[Dopamine Admin] collect failed:', d.platform, d.country, result.error);
+                    return reply({ error: result.error }, 422);
+                }
                 const message = result.partial
                     ? `수집 완료: ${result.count}건 (시간 제한으로 완료 항목만 안전 반영)`
                     : `수집 완료: ${result.count}건`;
