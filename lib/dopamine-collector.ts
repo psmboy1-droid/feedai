@@ -5,6 +5,12 @@
  */
 
 import { getSupabaseServer } from './supabase';
+import {
+    uploadToR2,
+    deleteFromR2ByUrlWithPrefix,
+    isDopamineTiktokR2Url,
+    DOPAMINE_TIKTOK_R2_PREFIX,
+} from './r2';
 
 export type Platform = 'youtube' | 'tiktok' | 'instagram';
 export type Country  = 'KR' | 'US' | 'JP';
@@ -324,7 +330,56 @@ async function collectYoutube(keyword: string, country: Country, limit: number):
 // ─────────────────────────────────────────
 // 2. TikTok
 // ─────────────────────────────────────────
-async function collectTiktok(keyword: string, country: Country, limit: number): Promise<TrendingVideo[]> {
+
+/** TikTok 썸네일 URL을 다운로드해 R2에 영구 저장하고 공개 URL을 반환. 실패 시 null. */
+async function uploadTiktokThumbnailToR2(
+    rawId: string,
+    country: Country,
+    thumbUrl: string,
+    timeoutMs = 7_000
+): Promise<string | null> {
+    if (!thumbUrl) return null;
+    try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+        let res: Response;
+        try {
+            res = await fetch(thumbUrl, {
+                signal: ctrl.signal,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                    'Referer':    'https://www.tiktok.com/',
+                },
+            });
+        } finally {
+            clearTimeout(timer);
+        }
+        if (!res.ok) return null;
+
+        const buf = await res.arrayBuffer();
+        if (buf.byteLength < 1024) return null; // 비정상 소형 응답 무시
+
+        const contentType = res.headers.get('content-type') || 'image/jpeg';
+        const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
+        // 고정 키: 재수집 시 자동 덮어쓰기 (timestamp 없음)
+        const key = `${DOPAMINE_TIKTOK_R2_PREFIX}${country.toLowerCase()}/${rawId}.${ext}`;
+
+        const publicUrl = await uploadToR2({ key, body: buf, contentType });
+        return publicUrl;
+    } catch {
+        return null;
+    }
+}
+
+const TIKTOK_THUMB_CONCURRENCY = 6;
+
+async function collectTiktok(
+    keyword: string,
+    country: Country,
+    limit: number,
+    supabase: ReturnType<typeof getSupabaseServer>,
+    softDeadlineAt?: number
+): Promise<TrendingVideo[]> {
     const videos: TrendingVideo[] = [];
     const seenIds = new Set<string>();
     let cursor = 0;
@@ -401,7 +456,51 @@ async function collectTiktok(keyword: string, country: Country, limit: number): 
         page++;
     }
 
-    return videos.map((v, i) => ({ ...v, rank_order: i + 1 }));
+    const ranked = videos.map((v, i) => ({ ...v, rank_order: i + 1 }));
+
+    // ── 썸네일 R2 영구 저장 단계 (만료 방지) ──────────────────────────────
+    if (ranked.length === 0) return ranked;
+
+    // 기존 DB에서 (platform=tiktok, country) 행 조회 → 새 배치에 없는 구파일 R2 삭제
+    const { data: existingRows } = await supabase
+        .from('trending_videos')
+        .select('video_id, thumbnail_url')
+        .eq('platform', 'tiktok')
+        .eq('country', country)
+        .range(0, 499);
+
+    const newIdSet = new Set(ranked.map(v => v.video_id));
+    const staleRows = (existingRows ?? []).filter(
+        (r: { video_id: string; thumbnail_url: string | null }) =>
+            !newIdSet.has(r.video_id) && r.thumbnail_url && isDopamineTiktokR2Url(r.thumbnail_url)
+    );
+    // 구 R2 파일 백그라운드 삭제 (실패해도 무시)
+    for (const row of staleRows) {
+        void deleteFromR2ByUrlWithPrefix(supabase, row.thumbnail_url!, DOPAMINE_TIKTOK_R2_PREFIX);
+    }
+
+    // 썸네일 R2 업로드 (동시 6개, 소프트 데드라인 준수)
+    const softBudget = softDeadlineAt ?? (Date.now() + DEFAULT_SOFT_BUDGET_MS);
+    const queue = [...ranked];
+    let qi = 0;
+
+    async function thumbWorker() {
+        while (qi < queue.length) {
+            if (Date.now() >= softBudget - 10_000) break;
+            const idx = qi++;
+            const item = queue[idx];
+            const rawId = item.video_id.replace(/_[A-Z]{2}$/, '');
+            const r2Url = await uploadTiktokThumbnailToR2(rawId, country, item.thumbnail_url, 7_000);
+            if (r2Url) {
+                ranked[idx] = { ...ranked[idx], thumbnail_url: r2Url };
+            }
+        }
+    }
+
+    const workers = Array.from({ length: Math.min(TIKTOK_THUMB_CONCURRENCY, ranked.length) }, () => thumbWorker());
+    await Promise.all(workers);
+
+    return ranked;
 }
 
 // ─────────────────────────────────────────
@@ -739,7 +838,7 @@ export async function collectTrending(
 
     try {
         if (platform === 'youtube')     freshVideos = await collectYoutube(keyword, country, displayLimit);
-        else if (platform === 'tiktok') freshVideos = await collectTiktok(keyword, country, displayLimit);
+        else if (platform === 'tiktok') freshVideos = await collectTiktok(keyword, country, displayLimit, supabase, options?.deadlineAt);
     } catch (e) {
         errorMsg = e instanceof Error ? e.message : '수집 실패';
     }

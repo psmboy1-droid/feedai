@@ -9,6 +9,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 // ─── 상수 ──────────────────────────────────────────────────────────────────
 export const MAX_R2_BYTES = Math.floor(9.5 * 1024 * 1024 * 1024); // 9.5 GB
 export const DOPAMINE_INSTAGRAM_R2_PREFIX = 'dopamine/instagram/';
+export const DOPAMINE_TIKTOK_R2_PREFIX    = 'dopamine/tiktok/';
 
 function getCleanEndpoint(rawEndpoint: string, bucket: string): string {
     let clean = (rawEndpoint || '').trim().replace(/\/+$/, '');
@@ -135,6 +136,12 @@ export async function deleteFromR2ByUrl(supabase: SupabaseClient, url: string): 
 export function isDopamineInstagramR2Url(url: string): boolean {
     const key = extractR2KeyFromUrl(url);
     return Boolean(key && key.startsWith(DOPAMINE_INSTAGRAM_R2_PREFIX) && !key.includes('..'));
+}
+
+// ─── 도파민 틱톡 전용 R2 URL 안전 검증 ───────────────────────────────────
+export function isDopamineTiktokR2Url(url: string): boolean {
+    const key = extractR2KeyFromUrl(url);
+    return Boolean(key && key.startsWith(DOPAMINE_TIKTOK_R2_PREFIX) && !key.includes('..'));
 }
 
 export async function deleteFromR2ByUrlWithPrefix(
